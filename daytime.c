@@ -56,11 +56,10 @@ int main (int argc, char* argv[]) {
         close(socketfd);
         exit(CONN_ERROR);
     }
-    printf("socketfd value is set to %d\n", socketfd);
+    //printf("socketfd value is set to %d\n", socketfd);
     char response[300] = {'\0'};
     read(socketfd, response, 299);
     printf("%s", response);
-    sleep(20);
     close(socketfd);
 }
 
