@@ -3,7 +3,8 @@
 /* error definitions */
 #define INIT_ERROR 1  // failure initializing server for accept state
 #define CONN_ERROR 2  // failure establishing initial connection with client
-#define COMM_ERROR 3  // fatal error reading from TCP client connection
+#define COMM_ERROR 3  // This should be changed to RD_ERRORfatal error reading from TCP client connection 
+#define WRT_ERROR 4   // error writing to 
 
 #define DEBUG 0
 #define ARG_MAX_LEN 4096  // longest possible pathname accepted from the client
@@ -18,9 +19,16 @@
 #include<sys/wait.h>
 #include<arpa/inet.h>
 
-void acknowledge(int);
 void controlLoop(int);
 void readConnection(char *, char [], int);
+void acknowledgeError(int, char []);
+void acknowledgeSuccess(int, char[]);
+void writeWrapper(int, char*, int);
+
+
+
+pid_t process_id;  // used by forked children to print useful information
+
 
 
 int main (int argc, char* argv[]) {
@@ -100,9 +108,10 @@ int main (int argc, char* argv[]) {
 /* this is the primary interface the client has with the server */
 void controlLoop(int connectfd) {
 
-    //acknowledge(connectfd);  // not sure if we need this immediately after establishing connection or not
-   
+    process_id = getpid();    // can make this a global var for easy printf debug access
+
     // prepare variales for readConnection call
+    int data_conn_flag = 0;  // tracks existence of open data connection
     char cmd;
     char client_arg[ARG_MAX_LEN] = {'\0'};
 
@@ -113,29 +122,34 @@ void controlLoop(int connectfd) {
         /* handling the command value as needed */
         switch (cmd) {
             case 'D':
-                printf("Server received command D\n");
+                printf("child %d: Server received command D\n", process_id);
+                // data_conn_flag = 1;
+                // testing acknowledgeSuccess
+                acknowledgeSuccess(connectfd, "61111"); // claiming a data port is open here
                 break;
             case 'C':
-                printf("Server received command C\n");
-                printf("Received pathname: %s\n", client_arg);
+                // if (!data_conn_flag) return error about data connection needing to exist 
+                printf("child %d: Server received command C\n", process_id);
+                printf("child %d: Received pathname: %s\n", process_id, client_arg);
                 break;
             case 'L':
-                printf("Server received comman L\n");
+                printf("child %d: Server received comman L\n", process_id);
                 break;
             case 'G':
-                printf("Server received command G\n");
+                printf("child %d: Server received command G\n", process_id);
                 break;
             case 'P':
-                printf("Server received command P\n");
-                printf("received pathname: %s\n", client_arg);
+                printf("child %d:Server received command P\n", process_id);
+                printf("child %d:received pathname: %s\n", process_id, client_arg);
                 break;
             case 'Q':
-                printf("Server received command Q\n");
-                printf("received pathname: %s\n", client_arg);
+                printf("child %d:Server received command Q\n", process_id);
+                printf("child %d:received pathname: %s\n", process_id, client_arg);
                 // exit(0);
                 break;
             default:
-                printf("Server received invalid command: %c\n", cmd);
+                printf("child %d:Server received invalid command: %c\n", process_id, cmd);
+                // respond with error
         }
 
         /* re-zero out client_arg for next pass */
@@ -175,9 +189,38 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
     client_arg[ARG_MAX_LEN-1] = '\0';
 }
 
-// spruce this up later. This will handle error checking stuff
-void acknowledge(int connectfd) {
+// response over control connection indicating previos command failed
+void acknowledgeError(int connectfd, char errorMsg[]) {
 
-    write(connectfd, "A\n", 2);
-    
+}
+
+// sends A response to client. 
+// data_port is null if no port number is being sent
+void acknowledgeSuccess(int connectfd, char *data_port) {
+
+    char response[8] = {'\0'};                                      // build response string
+    response[0] = 'A';
+    if (data_port != NULL) {
+        strcat( (response + 1), data_port);     //  append port number, if applicable. Expect to be terminated string
+        response[6] = '\n';
+    }
+    else {
+        response[1] = '\n';
+    }
+    printf("the acknowledgeSuccess message: %s\n", response);
+    // write response string to the client
+    int i = 0;
+    while (response[i] != '\0') {
+        writeWrapper(connectfd, &(response[i]), 1);
+        i++;
+   } 
+}
+
+void writeWrapper(int fd, char *msg, int write_bytes) {
+
+    if ( (write(fd, msg, write_bytes)) == -1) {
+        printf("child %d: Error writing to descriptor %d\n", process_id, fd);
+        // perform any necessary cleanup
+        exit(WRT_ERROR);
+    }
 }
