@@ -6,6 +6,7 @@
 #define COMM_ERROR 3  // fatal error reading from TCP client connection
 
 #define DEBUG 0
+#define ARG_MAX_LEN 4096  // longest possible pathname accepted from the client
 
 #include<netdb.h>
 #include<stdio.h>
@@ -103,10 +104,45 @@ void controlLoop(int connectfd) {
    
     // prepare variales for readConnection call
     char cmd;
-    char client_arg[4096] = {'\0'};
-    readConnection(&cmd, client_arg, connectfd);
-    
+    char client_arg[ARG_MAX_LEN] = {'\0'};
 
+    while (1) {
+        readConnection(&cmd, client_arg, connectfd);
+    
+        /* now here is where we fall into the switch statement */
+        /* handling the command value as needed */
+        switch (cmd) {
+            case 'D':
+                printf("Server received command D\n");
+                break;
+            case 'C':
+                printf("Server received command C\n");
+                printf("Received pathname: %s\n", client_arg);
+                break;
+            case 'L':
+                printf("Server received comman L\n");
+                break;
+            case 'G':
+                printf("Server received command G\n");
+                break;
+            case 'P':
+                printf("Server received command P\n");
+                printf("received pathname: %s\n", client_arg);
+                break;
+            case 'Q':
+                printf("Server received command Q\n");
+                printf("received pathname: %s\n", client_arg);
+                // exit(0);
+                break;
+            default:
+                printf("Server received invalid command: %c\n", cmd);
+        }
+
+        /* re-zero out client_arg for next pass */
+        for (int i = 0; i < ARG_MAX_LEN; i++) {
+            client_arg[i] = '\0';
+        }
+    }
 }
 
 
@@ -122,7 +158,7 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
     printf("Read %c from the control connection\n", *cmd);
     // command has been read. Now for the argument, if any    
     int i = 0;              // index for path
-    while (i < 4095) {      // longest possibl argument accepted from client
+    while (i < ARG_MAX_LEN - 1) {      // longest possibl argument accepted from client
 
         // read next character
         if (read(connectfd, &client_arg[i], 1) == 0) {
@@ -136,6 +172,7 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
         }
         i++;                        // otherwise increment and continue
     }
+    client_arg[ARG_MAX_LEN-1] = '\0';
 }
 
 // spruce this up later. This will handle error checking stuff
