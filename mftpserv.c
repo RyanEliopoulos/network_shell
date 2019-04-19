@@ -1,3 +1,15 @@
+/*
+ * Ryan Paulos
+ * CS 360 Final Project
+ *
+ * Note: outgoing writes depend on arg string ending with a \n\0.
+ * However, only the \n terminator is sent
+ *
+ *
+ * 
+ */
+
+
 #define MY_PORT_NUMBER 49999
 
 /* error definitions */
@@ -7,7 +19,7 @@
 #define WRT_ERROR 4   // error writing to 
 
 #define DEBUG 0
-#define ARG_MAX_LEN 4096  // longest possible pathname accepted from the client
+#define ARG_MAX_LEN 4096  // longest possible transmission across connections
 
 #include<netdb.h>
 #include<stdio.h>
@@ -122,13 +134,15 @@ void controlLoop(int connectfd) {
         /* handling the command value as needed */
         switch (cmd) {
             case 'D':
+                // Need to decide how to handle a D request if data_fd is already established..closing and rebuilding most sensible
                 printf("child %d: Server received command D\n", process_id);
                 // data_conn_flag = 1;
                 // testing acknowledgeSuccess
                 acknowledgeSuccess(connectfd, "61111"); // claiming a data port is open here
                 break;
             case 'C':
-                // if (!data_conn_flag) return error about data connection needing to exist 
+                // testing error message 
+                acknowledgeError(connectfd, "fixed error message oreo\n");
                 printf("child %d: Server received command C\n", process_id);
                 printf("child %d: Received pathname: %s\n", process_id, client_arg);
                 break;
@@ -191,19 +205,62 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
     client_arg[ARG_MAX_LEN-1] = '\0';
 }
 
-// response over control connection indicating previos command failed
-void acknowledgeError(int connectfd, char errorMsg[]) {
 
+// this fnx will attempt construction of a data connection
+// will relay the data connection fd back through data_fd
+void buildDataConnection (int *data_fd, int control_fd) {
+
+    // first, how to build a new wildcard socket?
+
+    // then, send A or E to client
+    
+    // accept() connection from client
+    // update data_fd
+   
+    struct sockaddr_in data_addr;
+    int listenfd;
+    
+    // prepare address info variables  
+    memset(&data_addr, 0, sizeof(data_addr));
+    data_addr.sin_family = AF_INET;
+    data_addr.sin_port = 0;
+    data_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    // prepare to accept incoming connection
+    int sockaddr_len = sizeof(struct sockaddr_in); 
+    if ( (listenfd = socket(AF_INET, SOCK_STREAM, 0) == -1) ) {
+        fprintf(stderr, "child %d: error establishing socket for data connection\n", process_id); // not a fatal error
+        // write error to client
+        acknowledgeError(control_fd, "Could not establish data socket\n");
+        return;
+    }
+    
 }
 
-// sends A response to client. 
+// response over control connection indicating previos command failed
+// needs error checking
+void acknowledgeError(int control_fd, char errorMsg[]) {
+    
+    char response[ARG_MAX_LEN] = {'\0'};  // construct response string
+    response[0] = 'E'; 
+    strncat(response+1, errorMsg, ARG_MAX_LEN-3);
+    printf("child %d: error message: %s\n", process_id, response);
+    int i = 0;
+    while ( errorMsg[i] != '\0') {
+        writeWrapper(control_fd, &(errorMsg[i]), 1);
+        i++;
+    }
+}
+
+// sends A response to client with optional arg data_port
 // data_port is null if no port number is being sent
 void acknowledgeSuccess(int connectfd, char *data_port) {
-
+    
+    // longest possible response: 'A' + 5 digit port + \n\0 - \0
     char response[8] = {'\0'};                                      // build response string
     response[0] = 'A';
     if (data_port != NULL) {
-        strcat( (response + 1), data_port);     //  append port number, if applicable. Expect to be terminated string
+        strcat(response+1, data_port);     //  append port number, if applicable. Expect to be terminated string
         response[6] = '\n';
     }
     else {
@@ -218,6 +275,8 @@ void acknowledgeSuccess(int connectfd, char *data_port) {
    } 
 }
 
+
+// process exits on error
 void writeWrapper(int fd, char *msg, int write_bytes) {
 
     if ( (write(fd, msg, write_bytes)) == -1) {
