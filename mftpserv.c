@@ -140,12 +140,12 @@ void controlLoop(int connectfd) {
                 printf("child %d: Server received command D\n", process_id);
                 // data_conn_flag = 1;
                 // testing acknowledgeSuccess
-                acknowledgeSuccess(connectfd, "61111"); // claiming a data port is open here
+                //acknowledgeSuccess(connectfd, "61111"); // claiming a data port is open here
+                buildDataConnection(&data_fd, connectfd);
                 break;
             case 'C':
                 // testing error message 
                 //acknowledgeError(connectfd, "fixed error message oreo\n");
-                buildDataConnection(&data_fd, connectfd);
                 printf("child %d: Server received command C\n", process_id);
                 printf("child %d: Received pathname: %s\n", process_id, client_arg);
                 break;
@@ -238,23 +238,42 @@ void buildDataConnection (int *data_fd, int control_fd) {
         acknowledgeError(control_fd, "Could not establish data socket\n");
         return;
     }
-   
-    printf("created new data socket on descriptor %d\n", listenfd); 
+    printf("child %d: created new data socket on descriptor %d\n", process_id, listenfd); 
+
+    // bind the socket
     if ( bind(listenfd, (struct sockaddr *) &data_addr, sizeof(data_addr)) < 0) {
         fprintf(stderr, "child %d: Error binding the data connection socket\n", process_id);
         fprintf(stderr, "child %d: %s\n", process_id, strerror(errno));
         acknowledgeError(control_fd, "Could not bind data socket\n");
         return;
     } 
-       
+
+    if (listen(listenfd, 0) == -1) {
+        fprintf(stderr, "child %d: listen call for data connection failed\n", process_id);
+        fprintf(stderr, "%s\n", strerror(errno));
+        acknowledgeError(control_fd, "Could not listen on data socket\n");
+        return; 
+    }
+
+    // retrieve the port number of the new socket
     struct sockaddr_in temp_addr;  
     memset(&temp_addr, 0, sizeof(temp_addr));
-
     getsockname(listenfd, (struct sockaddr *) &temp_addr, &sockaddr_len);
-   
     int data_port = ntohs(temp_addr.sin_port); 
-    printf("data port number: %d\n", data_port);
+    printf("child %d: data port number: %d\n", process_id, data_port);
+
+    // relay port number to client
+    char port_string[6]; 
+    snprintf(port_string, sizeof(char) * 6, "%d", data_port);
+    printf("child %d: data port string: %s\n", process_id, port_string);
+    acknowledgeSuccess(control_fd, port_string);
+
     int tempfd;
+    if ( (tempfd = accept(listenfd, (struct sockaddr *)NULL, NULL)) == -1) {
+        fprintf(stderr, "child %d: encountered error accepting data connection\n%s\n", process_id, strerror(errno));
+        return;
+    }
+    printf("child %d: accepted new port fd: %d\n", process_id, tempfd);
     // send acknowledge success msg with port number, then wait for incoming TCP conneection
     
     /* now need to extract the port number from the structure */
@@ -264,13 +283,7 @@ void buildDataConnection (int *data_fd, int control_fd) {
     //if ( (tempfd = accept(
   
     /* 
-    if (listen(listenfd, 0) == -1) {
-        fprintf(stderr, "child %d: listen call for data connection failed\n", process_id);
-        fprintf(stderr, "%s\n", strerror(errno));
-        acknowledgeError(control_fd, "Could not listen on data socket\n");
-        return; 
-    }
-    */
+       */
 
 }
 
