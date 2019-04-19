@@ -1,8 +1,9 @@
 #define MY_PORT_NUMBER 49999
 
 /* error definitions */
-#define INIT_ERROR 1
-#define CONN_ERROR 2
+#define INIT_ERROR 1  // failure initializing server for accept state
+#define CONN_ERROR 2  // failure establishing initial connection with client
+#define COMM_ERROR 3  // fatal error reading from TCP client connection
 
 #define DEBUG 0
 
@@ -18,6 +19,7 @@
 
 void acknowledge(int);
 void controlLoop(int);
+void readConnection(char *, char [], int);
 
 
 int main (int argc, char* argv[]) {
@@ -97,9 +99,43 @@ int main (int argc, char* argv[]) {
 /* this is the primary interface the client has with the server */
 void controlLoop(int connectfd) {
 
-    acknowledge(connectfd);
+    //acknowledge(connectfd);  // not sure if we need this immediately after establishing connection or not
+   
+    // prepare variales for readConnection call
+    char cmd;
+    char client_arg[4096] = {'\0'};
+    readConnection(&cmd, client_arg, connectfd);
     
 
+}
+
+
+// responsible for read() calls on the TCP connection
+// relays this info back to controlLoop
+void readConnection (char *cmd, char client_arg[], int connectfd) {
+
+    // First get the command
+    if (read(connectfd, cmd, 1) == 0) {
+        perror("Unexpected EOF reading command...terminating\n");
+        exit(COMM_ERROR);
+    }
+    printf("Read %c from the control connection\n", *cmd);
+    // command has been read. Now for the argument, if any    
+    int i = 0;              // index for path
+    while (i < 4095) {      // longest possibl argument accepted from client
+
+        // read next character
+        if (read(connectfd, &client_arg[i], 1) == 0) {
+            perror("Unexepcted EOF reading argument from client..terminating\n");
+            exit(COMM_ERROR);
+        }
+        if (client_arg[i] == '\n') {      // check for command termination
+            client_arg[i] = '\0';         // place real terminator if so
+            printf("Argument from control connection: %s\n", client_arg);
+            return;
+        }
+        i++;                        // otherwise increment and continue
+    }
 }
 
 // spruce this up later. This will handle error checking stuff
