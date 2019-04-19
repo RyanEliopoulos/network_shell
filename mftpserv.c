@@ -142,6 +142,7 @@ void controlLoop(int connectfd) {
                 // testing acknowledgeSuccess
                 //acknowledgeSuccess(connectfd, "61111"); // claiming a data port is open here
                 buildDataConnection(&data_fd, connectfd);
+                printf("child %d: back in control loop. data_fd is %d\n", process_id, data_fd);
                 break;
             case 'C':
                 // testing error message 
@@ -209,21 +210,12 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
 }
 
 
-// this fnx will attempt construction of a data connection
-// will relay the data connection fd back through data_fd
+// establishes data connection data_fd with client
 void buildDataConnection (int *data_fd, int control_fd) {
 
-    // first, how to build a new wildcard socket?
-
-    // then, send A or E to client
-    
-    // accept() connection from client
-    // update data_fd
-   
+    // prepare port address info variables  
     struct sockaddr_in data_addr;
     int listenfd;
-    
-    // prepare port address info variables  
     memset(&data_addr, 0, sizeof(data_addr));
     data_addr.sin_family = AF_INET;
     data_addr.sin_port = htons(0);
@@ -240,7 +232,6 @@ void buildDataConnection (int *data_fd, int control_fd) {
     }
     printf("child %d: created new data socket on descriptor %d\n", process_id, listenfd); 
 
-    // bind the socket
     if ( bind(listenfd, (struct sockaddr *) &data_addr, sizeof(data_addr)) < 0) {
         fprintf(stderr, "child %d: Error binding the data connection socket\n", process_id);
         fprintf(stderr, "child %d: %s\n", process_id, strerror(errno));
@@ -271,20 +262,17 @@ void buildDataConnection (int *data_fd, int control_fd) {
     int tempfd;
     if ( (tempfd = accept(listenfd, (struct sockaddr *)NULL, NULL)) == -1) {
         fprintf(stderr, "child %d: encountered error accepting data connection\n%s\n", process_id, strerror(errno));
+        close(listenfd);
         return;
     }
     printf("child %d: accepted new port fd: %d\n", process_id, tempfd);
-    // send acknowledge success msg with port number, then wait for incoming TCP conneection
-    
-    /* now need to extract the port number from the structure */
-     
 
-
-    //if ( (tempfd = accept(
-  
-    /* 
-       */
-
+    // cleanup listener
+    close(listenfd);
+    // send acnowledgement to client
+    acknowledgeSuccess(control_fd, NULL);
+    // push the data connection fd down the stack
+    *data_fd = tempfd;
 }
 
 // response over control connection indicating previos command failed
