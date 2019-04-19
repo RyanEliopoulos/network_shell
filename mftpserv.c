@@ -21,6 +21,7 @@
 #define DEBUG 0
 #define ARG_MAX_LEN 4096  // longest possible transmission across connections
 
+#include<errno.h>
 #include<netdb.h>
 #include<stdio.h>
 #include<stdlib.h>
@@ -32,6 +33,7 @@
 #include<arpa/inet.h>
 
 void controlLoop(int);
+void buildDataConnection(int *, int);
 void readConnection(char *, char [], int);
 void acknowledgeError(int, char []);
 void acknowledgeSuccess(int, char[]);
@@ -123,7 +125,7 @@ void controlLoop(int connectfd) {
     process_id = getpid();    // can make this a global var for easy printf debug access
 
     // prepare variales for readConnection call
-    int data_conn_flag = 0;  // tracks existence of open data connection
+    int data_fd = -1;  // tracks existence of open data connection; -1 means no data connection is open
     char cmd;
     char client_arg[ARG_MAX_LEN] = {'\0'};
 
@@ -142,7 +144,8 @@ void controlLoop(int connectfd) {
                 break;
             case 'C':
                 // testing error message 
-                acknowledgeError(connectfd, "fixed error message oreo\n");
+                //acknowledgeError(connectfd, "fixed error message oreo\n");
+                buildDataConnection(&data_fd, connectfd);
                 printf("child %d: Server received command C\n", process_id);
                 printf("child %d: Received pathname: %s\n", process_id, client_arg);
                 break;
@@ -220,21 +223,55 @@ void buildDataConnection (int *data_fd, int control_fd) {
     struct sockaddr_in data_addr;
     int listenfd;
     
-    // prepare address info variables  
+    // prepare port address info variables  
     memset(&data_addr, 0, sizeof(data_addr));
     data_addr.sin_family = AF_INET;
-    data_addr.sin_port = 0;
+    data_addr.sin_port = htons(0);
     data_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     // prepare to accept incoming connection
     int sockaddr_len = sizeof(struct sockaddr_in); 
-    if ( (listenfd = socket(AF_INET, SOCK_STREAM, 0) == -1) ) {
+    if ( (listenfd = socket(AF_INET, SOCK_STREAM, 0)) == -1)  {
         fprintf(stderr, "child %d: error establishing socket for data connection\n", process_id); // not a fatal error
+        fprintf(stderr, "%s\n", strerror(errno));
         // write error to client
         acknowledgeError(control_fd, "Could not establish data socket\n");
         return;
     }
+   
+    printf("created new data socket on descriptor %d\n", listenfd); 
+    if ( bind(listenfd, (struct sockaddr *) &data_addr, sizeof(data_addr)) < 0) {
+        fprintf(stderr, "child %d: Error binding the data connection socket\n", process_id);
+        fprintf(stderr, "child %d: %s\n", process_id, strerror(errno));
+        acknowledgeError(control_fd, "Could not bind data socket\n");
+        return;
+    } 
+       
+    struct sockaddr_in temp_addr;  
+    memset(&temp_addr, 0, sizeof(temp_addr));
+
+    getsockname(listenfd, (struct sockaddr *) &temp_addr, &sockaddr_len);
+   
+    int data_port = ntohs(temp_addr.sin_port); 
+    printf("data port number: %d\n", data_port);
+    int tempfd;
+    // send acknowledge success msg with port number, then wait for incoming TCP conneection
     
+    /* now need to extract the port number from the structure */
+     
+
+
+    //if ( (tempfd = accept(
+  
+    /* 
+    if (listen(listenfd, 0) == -1) {
+        fprintf(stderr, "child %d: listen call for data connection failed\n", process_id);
+        fprintf(stderr, "%s\n", strerror(errno));
+        acknowledgeError(control_fd, "Could not listen on data socket\n");
+        return; 
+    }
+    */
+
 }
 
 // response over control connection indicating previos command failed
