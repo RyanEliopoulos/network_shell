@@ -166,22 +166,24 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
 
     // First get the command
     if (read(connectfd, cmd, 1) == 0) {
-        perror("Unexpected EOF reading command...terminating\n");
+        printf("child %d: unexpected EOF reading command..terminating\n", process_id); 
+        //perror("Unexpected EOF reading command...terminating\n");
         exit(COMM_ERROR);
     }
-    printf("Read %c from the control connection\n", *cmd);
+    printf("child %d: Read %c from the control connection\n", process_id, *cmd);
     // command has been read. Now for the argument, if any    
     int i = 0;              // index for path
     while (i < ARG_MAX_LEN - 1) {      // longest possibl argument accepted from client
 
         // read next character
         if (read(connectfd, &client_arg[i], 1) == 0) {
-            perror("Unexepcted EOF reading argument from client..terminating\n");
+            printf("child %d: unexpected EOF reading argumet from client..terminating\n", process_id);
+            //perror("Unexepcted EOF reading argument from client..terminating\n");
             exit(COMM_ERROR);
         }
         if (client_arg[i] == '\n') {      // check for command termination
             client_arg[i] = '\0';         // place real terminator if so
-            printf("Argument from control connection: %s\n", client_arg);
+            printf("child %d: Argument from control connection: %s\n", process_id, client_arg);
             return;
         }
         i++;                        // otherwise increment and continue
@@ -207,7 +209,7 @@ void acknowledgeSuccess(int connectfd, char *data_port) {
     else {
         response[1] = '\n';
     }
-    printf("the acknowledgeSuccess message: %s\n", response);
+    printf("child %d: the acknowledgeSuccess message: %s\n", process_id, response);
     // write response string to the client
     int i = 0;
     while (response[i] != '\0') {
