@@ -38,6 +38,7 @@
 #include<arpa/inet.h>
 
 void controlLoop(int);
+void cwd(int, char *);
 void listDir(int);
 void buildDataConnection(int *, int);
 void readConnection(char *, char [], int);
@@ -150,8 +151,11 @@ void controlLoop(int connectfd) {
                 printf("child %d: back in control loop. data_fd is %d\n", process_id, data_fd);
                 break;
             case 'C':       
+                // woring on CWD now
                 printf("child %d: Server received command C\n", process_id);
                 printf("child %d: Received pathname: %s\n", process_id, client_arg);
+                cwd(connectfd, client_arg);
+                printf("child %d: server has returned from cwd call\n", process_id);
                 break;
             case 'L':       // rls
                 printf("child %d: Server received comman L\n", process_id);
@@ -224,6 +228,23 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
     client_arg[ARG_MAX_LEN-1] = '\0';
 }
 
+
+// attempts to change server's working diretory to client_arg
+void cwd (int control_connection, char *client_arg) {
+
+    int ret;
+    if ( (ret = chdir(client_arg)) == -1) {
+        char response[ARG_MAX_LEN] = {'\0'};
+        acknowledgeError(control_connection, "directory doesn't fucking exist yo");
+        printf("child %d: failed to change directory\n%s\n", process_id, strerror(errno));
+    }
+    else {
+        acknowledgeSuccess(control_connection, NULL);
+        printf("child %d: successfully changed directories\n", process_id);
+    }
+}
+
+
 // forks call to exec(ls -l)
 // remember to close the data_fd after fork
 void listDir(int data_fd) {
@@ -238,7 +259,6 @@ void listDir(int data_fd) {
         close(data_fd);
     }
 }
-
 
 // establishes data connection data_fd with client
 void buildDataConnection (int *data_fd, int control_fd) {
