@@ -33,6 +33,7 @@
 #include<arpa/inet.h>
 
 void controlLoop(int);
+void listDir(int);
 void buildDataConnection(int *, int);
 void readConnection(char *, char [], int);
 void acknowledgeError(int, char []);
@@ -138,19 +139,18 @@ void controlLoop(int connectfd) {
             case 'D':
                 // Need to decide how to handle a D request if data_fd is already established..closing and rebuilding most sensible
                 printf("child %d: Server received command D\n", process_id);
-                // data_conn_flag = 1;
-                // testing acknowledgeSuccess
-                //acknowledgeSuccess(connectfd, "61111"); // claiming a data port is open here
                 buildDataConnection(&data_fd, connectfd);
                 printf("child %d: back in control loop. data_fd is %d\n", process_id, data_fd);
                 break;
             case 'C':
-                // testing error message 
-                //acknowledgeError(connectfd, "fixed error message oreo\n");
                 printf("child %d: Server received command C\n", process_id);
                 printf("child %d: Received pathname: %s\n", process_id, client_arg);
                 break;
             case 'L':
+                //
+                // IMPORANT: for now this is assumin data connection was properly set up first
+                // in reality we need to check if data_fd is -1 or whats up
+                listDir(data_fd);
                 printf("child %d: Server received comman L\n", process_id);
                 break;
             case 'G':
@@ -207,6 +207,22 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
         i++;                        // otherwise increment and continue
     }
     client_arg[ARG_MAX_LEN-1] = '\0';
+}
+
+
+// forks call to exec(ls -l)
+// remember to close the data_fd after fork
+void listDir(int data_fd) {
+
+    if (!fork()) {
+        close(1);   // make room for data_fd
+        dup(data_fd);
+        close(data_fd);
+        execlp("ls", "ls", "-l", (char *) NULL);
+    }
+    else {
+        close(data_fd);
+    }
 }
 
 
@@ -290,7 +306,7 @@ void acknowledgeError(int control_fd, char errorMsg[]) {
     }
 }
 
-// sends A response to client with optional arg data_port
+// sends 'A' response to client with optional arg data_port
 // data_port is null if no port number is being sent
 void acknowledgeSuccess(int connectfd, char *data_port) {
     
@@ -312,7 +328,6 @@ void acknowledgeSuccess(int connectfd, char *data_port) {
         i++;
    } 
 }
-
 
 // process exits on error
 void writeWrapper(int fd, char *msg, int write_bytes) {
