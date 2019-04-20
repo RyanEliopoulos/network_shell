@@ -220,7 +220,7 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
         }
         if (client_arg[i] == '\n') {      // check for command termination
             client_arg[i] = '\0';         // place real terminator if so
-            printf("child %d: Argument from control connection: %s\n", process_id, client_arg);
+            printf("child %d: Argument from control connection: <%s>\n", process_id, client_arg);
             return;
         }
         i++;                        // otherwise increment and continue
@@ -235,7 +235,7 @@ void cwd (int control_connection, char *client_arg) {
     int ret;
     if ( (ret = chdir(client_arg)) == -1) {
         char response[ARG_MAX_LEN] = {'\0'};
-        acknowledgeError(control_connection, "directory doesn't fucking exist yo");
+        acknowledgeError(control_connection, "directory doesn't fucking exist yo\n");
         printf("child %d: failed to change directory\n%s\n", process_id, strerror(errno));
     }
     else {
@@ -275,7 +275,7 @@ void buildDataConnection (int *data_fd, int control_fd) {
     int sockaddr_len = sizeof(struct sockaddr_in); 
     if ( (listenfd = socket(AF_INET, SOCK_STREAM, 0)) == -1)  {
         fprintf(stderr, "child %d: error establishing socket for data connection\n", process_id); // not a fatal error
-        fprintf(stderr, "%s\n", strerror(errno));
+        fprintf(stderr, "child %d: %s\n", process_id, strerror(errno));
         // write error to client
         acknowledgeError(control_fd, "Could not establish data socket\n");
         return;
@@ -291,7 +291,7 @@ void buildDataConnection (int *data_fd, int control_fd) {
 
     if (listen(listenfd, 0) == -1) {
         fprintf(stderr, "child %d: listen call for data connection failed\n", process_id);
-        fprintf(stderr, "%s\n", strerror(errno));
+        fprintf(stderr, "child %d: %s\n", process_id, strerror(errno));
         acknowledgeError(control_fd, "Could not listen on data socket\n");
         return; 
     }
@@ -332,7 +332,7 @@ void acknowledgeError(int control_fd, char errorMsg[]) {
     char response[ARG_MAX_LEN] = {'\0'};  // construct response string
     response[0] = 'E'; 
     strncat(response+1, errorMsg, ARG_MAX_LEN-3);
-    printf("child %d: error message: %s\n", process_id, response);
+    printf("child %d: error message written to client: %s\n", process_id, response);
     int i = 0;
     while ( errorMsg[i] != '\0') {
         writeWrapper(control_fd, &(errorMsg[i]), 1);
