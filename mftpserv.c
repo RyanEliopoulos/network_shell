@@ -5,8 +5,13 @@
  * Note: outgoing writes depend on arg string ending with a \n\0.
  * However, only the \n terminator is sent
  *
- *
+ * Note: if a data connection has already been established and another data connection request is made prior to the first being used,
+ * then the initial connection is closed by the server
  * 
+ *
+ *
+ *
+ * Note: will really need to take the time to change printf statements to fprint/conditional upon debug mode
  */
 
 
@@ -41,9 +46,7 @@ void acknowledgeSuccess(int, char[]);
 void writeWrapper(int, char*, int);
 
 
-
 pid_t process_id;  // used by forked children to print useful information
-
 
 
 int main (int argc, char* argv[]) {
@@ -131,52 +134,64 @@ void controlLoop(int connectfd) {
     char client_arg[ARG_MAX_LEN] = {'\0'};
 
     while (1) {
+
         readConnection(&cmd, client_arg, connectfd);
-    
         /* now here is where we fall into the switch statement */
         /* handling the command value as needed */
         switch (cmd) {
             case 'D':
-                // Need to decide how to handle a D request if data_fd is already established..closing and rebuilding most sensible
                 printf("child %d: Server received command D\n", process_id);
+                if (data_fd != -1) {
+                    printf("child %d: tearing down unused data connection and building a new one\n", process_id);
+                    close(data_fd);
+                    data_fd = -1;
+                }
                 buildDataConnection(&data_fd, connectfd);
                 printf("child %d: back in control loop. data_fd is %d\n", process_id, data_fd);
                 break;
-            case 'C':
+            case 'C':       
                 printf("child %d: Server received command C\n", process_id);
                 printf("child %d: Received pathname: %s\n", process_id, client_arg);
                 break;
-            case 'L':
-                //
-                // IMPORANT: for now this is assumin data connection was properly set up first
-                // in reality we need to check if data_fd is -1 or whats up
-                listDir(data_fd);
+            case 'L':       // rls
                 printf("child %d: Server received comman L\n", process_id);
+                if (data_fd == -1) {  // no data connection
+                    acknowledgeError(connectfd, "Command 'L' requires a data connection\n");
+                }
+                else {
+                    printf("child %d: about to fork ls -l command\n", process_id);
+                    listDir(data_fd);     // exec ls -l. closes data_fd
+                    data_fd = -1;         // set no connectin flag
+                }
+                printf("child %d: data connection file descriptor has been closed\n", process_id);
+                printf("child %d: rls command complete\n", process_id);
                 break;
-            case 'G':
+            case 'G':      
                 printf("child %d: Server received command G\n", process_id);
                 break;
-            case 'P':
+            case 'P':     
                 printf("child %d:Server received command P\n", process_id);
                 printf("child %d:received pathname: %s\n", process_id, client_arg);
                 break;
-            case 'Q':
+            case 'Q':    // quit
                 printf("child %d:Server received command Q\n", process_id);
-                printf("child %d:received pathname: %s\n", process_id, client_arg);
-                // exit(0);
+                if (data_fd != -1) close(data_fd);
+                acknowledgeSuccess(connectfd, NULL);
+                exit(0);
                 break;
-            default:
+            default:     // generic invalid command error. Untested
                 printf("child %d:Server received invalid command: %c\n", process_id, cmd);
-                // respond with error
+                char error_response[ARG_MAX_LEN] = {'\0'};          // build error response string
+                error_response[0] = cmd;
+                strcat(error_response, ": not a valid command\n");
+                acknowledgeError(connectfd, error_response);        // then send it
         }
-
         /* re-zero out client_arg for next pass */
         for (int i = 0; i < ARG_MAX_LEN; i++) {
             client_arg[i] = '\0';
         }
     }
 }
-
 
 // responsible for read() calls on the TCP connection
 // relays this info back to controlLoop
@@ -208,7 +223,6 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
     }
     client_arg[ARG_MAX_LEN-1] = '\0';
 }
-
 
 // forks call to exec(ls -l)
 // remember to close the data_fd after fork
@@ -331,10 +345,8 @@ void acknowledgeSuccess(int connectfd, char *data_port) {
 
 // process exits on error
 void writeWrapper(int fd, char *msg, int write_bytes) {
-
     if ( (write(fd, msg, write_bytes)) == -1) {
         printf("child %d: Error writing to descriptor %d\n", process_id, fd);
-        // perform any necessary cleanup
         exit(WRT_ERROR);
     }
 }
