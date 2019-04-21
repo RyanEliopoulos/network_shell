@@ -36,15 +36,17 @@
 #include<unistd.h>
 #include<sys/wait.h>
 #include<arpa/inet.h>
+#include<sys/stat.h>
 
 void controlLoop(int);
+void localToRemote(int, int, char*);
 void cwd(int, char *);
 void listDir(int);
 void buildDataConnection(int *, int);
 void readConnection(char *, char [], int);
 void acknowledgeError(int, char []);
 void acknowledgeSuccess(int, char[]);
-void writeWrapper(int, char*, int);
+int writeWrapper(int, char*, int);
 
 
 pid_t process_id;  // used by forked children to print useful information
@@ -140,7 +142,7 @@ void controlLoop(int connectfd) {
         /* now here is where we fall into the switch statement */
         /* handling the command value as needed */
         switch (cmd) {
-            case 'D':
+            case 'D':       // establish data connection
                 printf("child %d: Server received command D\n", process_id);
                 if (data_fd != -1) {
                     printf("child %d: tearing down unused data connection and building a new one\n", process_id);
@@ -150,8 +152,7 @@ void controlLoop(int connectfd) {
                 buildDataConnection(&data_fd, connectfd);
                 printf("child %d: back in control loop. data_fd is %d\n", process_id, data_fd);
                 break;
-            case 'C':       
-                // woring on CWD now
+            case 'C':       // rwd
                 printf("child %d: Server received command C\n", process_id);
                 printf("child %d: Received pathname: %s\n", process_id, client_arg);
                 cwd(connectfd, client_arg);
@@ -161,21 +162,41 @@ void controlLoop(int connectfd) {
                 printf("child %d: Server received comman L\n", process_id);
                 if (data_fd == -1) {  // no data connection
                     acknowledgeError(connectfd, "Command 'L' requires a data connection\n");
+                    printf("child %d: Client must first request a data connection\n", process_id);
                 }
                 else {
                     printf("child %d: about to fork ls -l command\n", process_id);
+                    acknowledgeSuccess(connectfd, NULL);
                     listDir(data_fd);     // exec ls -l. closes data_fd
                     data_fd = -1;         // set no connectin flag
+                    printf("child %d: data connection file descriptor has been closed\n", process_id);
                 }
-                printf("child %d: data connection file descriptor has been closed\n", process_id);
                 printf("child %d: rls command complete\n", process_id);
                 break;
             case 'G':      
                 printf("child %d: Server received command G\n", process_id);
+                if (data_fd == -1) {
+                    acknowledgeError(connectfd, "Command 'G' requires a data connection\n");
+                    fprintf(stderr, "child %d: Command 'G' requires a data connection\n", process_id);
+                }
+                else {
+                    localToRemote(connectfd, data_fd, client_arg);
+                    printf("child %d: completed localToRemote\n", process_id);
+                }
                 break;
             case 'P':     
                 printf("child %d:Server received command P\n", process_id);
                 printf("child %d:received pathname: %s\n", process_id, client_arg);
+                if (data_fd == -1) {
+                    acknowledgeError(connectfd, "Command 'P' requires a data connection\n");
+                    printf("Child %d: Command 'P' requires client to establish data connection\n", process_id);
+                }
+                else {
+                    /* localFromRemote() */  // the data connection will be closed in this function
+                    data_fd = -1;
+                    printf("child %d: The data connection has been closed\n", process_id); 
+                    printf("Child %d: put command complete\n", process_id);
+                }
                 break;
             case 'Q':    // quit
                 printf("child %d:Server received command Q\n", process_id);
@@ -229,6 +250,59 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
 }
 
 
+//  writes a local file to the data connection
+//  server's response to the 'G' command
+void localToRemote (int control_fd, int data_fd, char *client_arg) {
+   
+    // if (client_arg not in restricted list)  
+    
+    // init vars 
+    char response[ARG_MAX_LEN] = {'\0'};  // error response string
+    FILE *file;                           // stream for desired file
+    struct stat file_info;               
+    if (stat(client_arg, &file_info) == -1) {
+        strcat(response, strerror(errno));    
+        strcat(response, "\n");             // strerror doesn't supply a newline
+        fprintf(stderr, "Child %d: stat failed in localToRemote: %s\n", process_id, strerror(errno)); 
+    }
+    else if (!S_ISREG(file_info.st_mode)) {
+        strcat(response, "path is not a regular file\n");
+        fprintf(stderr, "Child %d: given path is not a regular file\n", process_id);
+    }   
+    else if ( (file = fopen(client_arg, "r")) == NULL) {
+        strcat(response, strerror(errno));
+        strcat(response, "\n");
+        fprintf(stderr, "Child %d: unable to open the file\n%s\n", process_id, strerror(errno));
+    }
+    else {  // at this point the file has been opened successfully
+        acknowledgeSuccess(control_fd, NULL); 
+
+        char file_chunk[512] = {'\0'};
+        while ( fread(file_chunk, sizeof(char), 511, file) == 511) {
+            /* upon write failure the server will return to the control loop   */
+            /* looking for further commands. If client disconnected it will be */
+            /* handled there                                                   */
+            if (writeWrapper(data_fd, file_chunk, 512) == -1) {
+                fprintf(stderr, "child %d: Error writing file to data connection\n", process_id);
+                close(data_fd);
+                return;
+            }
+        }
+        // Now check if there was an error.
+        // if there was not, the last group
+        // of data needs to be written
+        //
+    }
+
+    /* this covers error response for the first      */
+    /* three clauses of the initial if               */
+    /* any errors after opening the file are handled */
+    /* in the outer else clause                      */
+    acknowledgeError(control_fd, response);
+    printf("acknowledging error to client\n");
+    close(data_fd);
+}
+
 // attempts to change server's working diretory to client_arg
 void cwd (int control_connection, char *client_arg) {
 
@@ -248,7 +322,6 @@ void cwd (int control_connection, char *client_arg) {
 // forks call to exec(ls -l)
 // remember to close the data_fd after fork
 void listDir(int data_fd) {
-
     if (!fork()) {
         close(1);   // make room for data_fd
         dup(data_fd);
@@ -320,7 +393,7 @@ void buildDataConnection (int *data_fd, int control_fd) {
     // cleanup listener
     close(listenfd);
     // send acnowledgement to client
-    acknowledgeSuccess(control_fd, NULL);
+    //acknowledgeSuccess(control_fd, NULL);  // This is a mistake.  
     // push the data connection fd down the stack
     *data_fd = tempfd;
 }
@@ -335,7 +408,10 @@ void acknowledgeError(int control_fd, char errorMsg[]) {
     printf("child %d: error message written to client: %s\n", process_id, response);
     int i = 0;
     while ( errorMsg[i] != '\0') {
-        writeWrapper(control_fd, &(errorMsg[i]), 1);
+        if (writeWrapper(control_fd, &(errorMsg[i]), 1) == -1) {
+            fprintf(stderr, "child %d: encountered error writing to control channel. Fatal\n", process_id);
+            exit(WRT_ERROR);
+        }
         i++;
     }
 }
@@ -358,15 +434,19 @@ void acknowledgeSuccess(int connectfd, char *data_port) {
     // write response string to the client
     int i = 0;
     while (response[i] != '\0') {
-        writeWrapper(connectfd, &(response[i]), 1);
+        if (writeWrapper(connectfd, &(response[i]), 1) == -1) {
+            fprintf(stderr, "Child %d: error writing to control stream. Fatal\n", process_id);
+            exit(WRT_ERROR);
+        }
         i++;
    } 
 }
 
 // process exits on error
-void writeWrapper(int fd, char *msg, int write_bytes) {
+int writeWrapper(int fd, char *msg, int write_bytes) {
     if ( (write(fd, msg, write_bytes)) == -1) {
         printf("child %d: Error writing to descriptor %d\n", process_id, fd);
-        exit(WRT_ERROR);
+        return -1;
     }
+    return 0;
 }
