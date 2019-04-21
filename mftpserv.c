@@ -278,7 +278,8 @@ void localToRemote (int control_fd, int data_fd, char *client_arg) {
         acknowledgeSuccess(control_fd, NULL); 
 
         char file_chunk[512] = {'\0'};
-        while ( fread(file_chunk, sizeof(char), 511, file) == 511) {
+        int read;
+        while ( (read = fread(file_chunk, sizeof(char), 511, file)) == 511) {
             /* upon write failure the server will return to the control loop   */
             /* looking for further commands. If client disconnected it will be */
             /* handled there                                                   */
@@ -291,7 +292,18 @@ void localToRemote (int control_fd, int data_fd, char *client_arg) {
         // Now check if there was an error.
         // if there was not, the last group
         // of data needs to be written
-        //
+        if (feof(file)) {  // write last data chunk and bail
+            //file_chunk[read] = '\0'; // hmmm???
+            if (writeWrapper(data_fd, file_chunk, read) == -1) {
+                fprintf(stderr, "child %d: Error writing final final chunk to data connection\n", process_id);
+            }
+            // file successfully written.
+        } 
+        else {   // a write error occurred :(
+            fprintf(stderr, "child %d: Encountered fread error transfering file to client\n", process_id);
+        }
+        close(data_fd);
+        return;
     }
 
     /* this covers error response for the first      */
