@@ -193,6 +193,7 @@ void controlLoop(int connectfd) {
                 }
                 else {
                     /* localFromRemote() */  // the data connection will be closed in this function
+                    // actually like remoteToLocal() better
                     data_fd = -1;
                     printf("child %d: The data connection has been closed\n", process_id); 
                     printf("Child %d: put command complete\n", process_id);
@@ -289,17 +290,16 @@ void localToRemote (int control_fd, int data_fd, char *client_arg) {
                 return;
             }
         }
-        // Now check if there was an error.
+        // Now check if there was an fread error.
         // if there was not, the last group
         // of data needs to be written
-        if (feof(file)) {  // write last data chunk and bail
-            //file_chunk[read] = '\0'; // hmmm???
+        if (feof(file)) {  
             if (writeWrapper(data_fd, file_chunk, read) == -1) {
                 fprintf(stderr, "child %d: Error writing final final chunk to data connection\n", process_id);
             }
             // file successfully written.
         } 
-        else {   // a write error occurred :(
+        else {   // an fread error occurred :(
             fprintf(stderr, "child %d: Encountered fread error transfering file to client\n", process_id);
         }
         close(data_fd);
