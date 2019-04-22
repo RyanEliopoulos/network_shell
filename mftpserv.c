@@ -26,6 +26,7 @@
 #define DEBUG 0
 #define ARG_MAX_LEN 4096  // longest possible transmission across connections
 
+#include<fcntl.h>
 #include<errno.h>
 #include<netdb.h>
 #include<stdio.h>
@@ -39,6 +40,7 @@
 #include<sys/stat.h>
 
 void controlLoop(int);
+void remoteToLocal(int, int, char*);
 void localToRemote(int, int, char*);
 void cwd(int, char *);
 void listDir(int);
@@ -181,6 +183,7 @@ void controlLoop(int connectfd) {
                 }
                 else {
                     localToRemote(connectfd, data_fd, client_arg);
+                    data_fd = -1;
                     printf("child %d: completed localToRemote\n", process_id);
                 }
                 break;
@@ -193,7 +196,9 @@ void controlLoop(int connectfd) {
                 }
                 else {
                     /* localFromRemote() */  // the data connection will be closed in this function
+
                     // actually like remoteToLocal() better
+                    remoteToLocal(connectfd, data_fd, client_arg);
                     data_fd = -1;
                     printf("child %d: The data connection has been closed\n", process_id); 
                     printf("Child %d: put command complete\n", process_id);
@@ -250,6 +255,97 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
     client_arg[ARG_MAX_LEN-1] = '\0';
 }
 
+// "puts" the client's file on the server
+// relies upon a "write file" mutex that ensures only one
+// client attempts to create a file at a time.
+void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
+
+
+    // get finary semaphore controlling file writes
+    char response[ARG_MAX_LEN];
+    if (access(client_arg, F_OK)) {
+        int tempno = errno;
+        if (tempno == ENOENT) {  // file name not in use
+            int new_fd;
+            if ( (new_fd = open(client_arg, O_CREAT | O_WRONLY, S_IRWXU | S_IRGRP)) == -1) {  // attempt to create the file
+                strcat(response, strerror(errno));
+                strcat(response, "\n");
+                acknowledgeError(control_fd, response);
+                fprintf(stderr, "Child %d: error openig new file locally: %s\n", process_id, strerror(errno));         
+            }
+            else {   // now beginning data transfer
+                //
+                //
+                // NOTE: release the binary semaphore here (i think that's as soon as possible)
+                //
+                acknowledgeSuccess(control_fd, NULL);
+                int read_bytes;
+                char temp_data[512];
+                while ( (read_bytes = read(data_fd, temp_data, 512)) > 0) {
+                    if ( writeWrapper(new_fd, temp_data, 512) == -1) {
+                        strcat(response, strerror(errno));
+                        strcat(response, "\n");
+                        fprintf(stderr, "child %d: error writing to local file: %s\n", process_id, strerror(errno));
+                        break;
+                    }
+                }
+                if (read_bytes < 0) {
+                    strcat(response, strerror(errno));
+                    strcat(response, "\n");
+                    fprintf(stderr, "child %d: error reading from data connection: %s\n", process_id, strerror(errno));
+                }
+            }
+        }
+        else {  // there was potentially an error with access itself
+            fprintf(stderr, "child %d: access call error: %s\n", process_id, strerror(errno));
+            strcat(response, strerror(errno));
+            strcat(response, "\n");
+        }
+    }
+    else {  // file already exists
+        fprintf(stderr, "child %d: File we were asked to create already exists\n", process_id);
+        strcat(response, "That file already exists on the server\n");
+        acknowledgeError(control_fd, response);
+    }
+    close(data_fd);
+
+//    char response[ARG_MAX_LEN] = {'\0'};        // error response string
+//    /* while (get write semaphore loop */
+//    int access_ret = access(client_arg, F_OK);
+//    if (access_ret) {             // checking if the file exists
+//        strcat(response, strerror(errno));          
+//        strcat(response, "\n");                    
+//        acknowledgeError(control_fd, response);
+//        fprintf(stderr, "child %d: error checking access locally: %s\n", process_id, strerror(errno));
+//    }
+//    else {                                      // file doesn't exist
+//        int new_fd;
+//        if ( (new_fd = open(client_arg, O_CREAT)) == -1) {  // attempt to create the file
+//            strcat(response, strerror(errno));
+//            strcat(response, "\n");
+//            acknowledgeError(control_fd, response);
+//            fprintf(stderr, "Child %d: error openig new file locally: %s\n", process_id, strerror(errno));         
+//        }
+//        else {   // now beginning data transfer
+//            int read_bytes;
+//            char temp_data[512];
+//            while ( (read_bytes = read(data_fd, temp_data, 512)) > 0) {
+//                if ( writeWrapper(new_fd, temp_data, 512) == -1) {
+//                    strcat(response, strerror(errno));
+//                    strcat(response, "\n");
+//                    fprintf(stderr, "child %d: error writing to local file: %s\n", process_id, strerror(errno));
+//                    break;
+//                }
+//            }
+//            if (read_bytes < 0) {
+//                strcat(response, strerror(errno));
+//                strcat(response, "\n");
+//                fprintf(stderr, "child %d: error reading from data connection: %s\n", process_id, strerror(errno));
+//            }
+//        }
+//    } 
+//    close(data_fd);
+}
 
 //  writes a local file to the data connection
 //  server's response to the 'G' command
