@@ -56,9 +56,11 @@ pid_t process_id;  // used by forked children to print useful information
 
 int main (int argc, char* argv[]) {
 
-    struct sockaddr_in servAddr;
-
+    // initialize global file-write semaphore
+    //int sem = semget(IPC_PRIVATE, 1, S_IRUSR | S_IWUSR);
+    
     // prepare address info variables 
+    struct sockaddr_in servAddr;
     memset(&servAddr, 0, sizeof(servAddr));
     servAddr.sin_family = AF_INET;
     servAddr.sin_port = htons(MY_PORT_NUMBER);
@@ -277,21 +279,25 @@ void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
                 // NOTE: release the binary semaphore here (i think that's as soon as possible)
                 //
                 acknowledgeSuccess(control_fd, NULL);
-                int read_bytes;
+                int read_bytes, written_bytes;
                 char temp_data[512];
                 while ( (read_bytes = read(data_fd, temp_data, 512)) > 0) {
-                    if ( writeWrapper(new_fd, temp_data, 512) == -1) {
+                    printf("child %d: read %d bytes from client\n", process_id, read_bytes);
+                    if ( (written_bytes = writeWrapper(new_fd, temp_data, read_bytes)) == -1) {
                         strcat(response, strerror(errno));
                         strcat(response, "\n");
                         fprintf(stderr, "child %d: error writing to local file: %s\n", process_id, strerror(errno));
                         break;
                     }
+                    printf("child %d: wrote %d more bytes to the new file\n", process_id, written_bytes);
                 }
                 if (read_bytes < 0) {
                     strcat(response, strerror(errno));
                     strcat(response, "\n");
                     fprintf(stderr, "child %d: error reading from data connection: %s\n", process_id, strerror(errno));
                 }
+                printf("child %d: reached EOF reading from data connection\n", process_id);
+                close(new_fd);
             }
         }
         else {  // there was potentially an error with access itself
@@ -513,9 +519,10 @@ void acknowledgeSuccess(int connectfd, char *data_port) {
 
 // process exits on error
 int writeWrapper(int fd, char *msg, int write_bytes) {
-    if ( (write(fd, msg, write_bytes)) == -1) {
+    int bytes_written;
+    if ( (bytes_written = write(fd, msg, write_bytes)) == -1) {
         printf("child %d: Error writing to descriptor %d\n", process_id, fd);
         return -1;
     }
-    return 0;
+    return bytes_written;
 }
