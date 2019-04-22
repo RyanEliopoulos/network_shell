@@ -126,7 +126,6 @@ int main (int argc, char* argv[]) {
     }
 }
 
-
 /* connection with the client has been established */
 /* this is the primary interface the client has with the server */
 void controlLoop(int connectfd) {
@@ -260,7 +259,6 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
 // client attempts to create a file at a time.
 void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
 
-
     // get finary semaphore controlling file writes
     char response[ARG_MAX_LEN];
     if (access(client_arg, F_OK)) {
@@ -308,43 +306,6 @@ void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
         acknowledgeError(control_fd, response);
     }
     close(data_fd);
-
-//    char response[ARG_MAX_LEN] = {'\0'};        // error response string
-//    /* while (get write semaphore loop */
-//    int access_ret = access(client_arg, F_OK);
-//    if (access_ret) {             // checking if the file exists
-//        strcat(response, strerror(errno));          
-//        strcat(response, "\n");                    
-//        acknowledgeError(control_fd, response);
-//        fprintf(stderr, "child %d: error checking access locally: %s\n", process_id, strerror(errno));
-//    }
-//    else {                                      // file doesn't exist
-//        int new_fd;
-//        if ( (new_fd = open(client_arg, O_CREAT)) == -1) {  // attempt to create the file
-//            strcat(response, strerror(errno));
-//            strcat(response, "\n");
-//            acknowledgeError(control_fd, response);
-//            fprintf(stderr, "Child %d: error openig new file locally: %s\n", process_id, strerror(errno));         
-//        }
-//        else {   // now beginning data transfer
-//            int read_bytes;
-//            char temp_data[512];
-//            while ( (read_bytes = read(data_fd, temp_data, 512)) > 0) {
-//                if ( writeWrapper(new_fd, temp_data, 512) == -1) {
-//                    strcat(response, strerror(errno));
-//                    strcat(response, "\n");
-//                    fprintf(stderr, "child %d: error writing to local file: %s\n", process_id, strerror(errno));
-//                    break;
-//                }
-//            }
-//            if (read_bytes < 0) {
-//                strcat(response, strerror(errno));
-//                strcat(response, "\n");
-//                fprintf(stderr, "child %d: error reading from data connection: %s\n", process_id, strerror(errno));
-//            }
-//        }
-//    } 
-//    close(data_fd);
 }
 
 //  writes a local file to the data connection
