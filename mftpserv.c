@@ -1,4 +1,12 @@
 /*
+ *
+ *
+ *
+ * TODO: remove user execute file permission in localToRemote
+ * TODO: set put file creation permissions to -rwxr-----
+ * TODO: binary semaphore used to create files
+ * TODO: clean up this fucking mess
+ *
  * Ryan Paulos
  * CS 360 Final Project
  *
@@ -12,6 +20,9 @@
  *
  *
  * Note: will really need to take the time to change printf statements to fprint/conditional upon debug mode
+ * 
+ *
+ * 
  */
 
 
@@ -25,7 +36,10 @@
 
 #define DEBUG 0
 #define ARG_MAX_LEN 4096  // longest possible transmission across connections
+#define SEM_MAX_TRIES 3   // Number of times the process attempts to get the file-writing semaphore before responding with an error
 
+#include<sys/sem.h>
+#include<sys/ipc.h>
 #include<fcntl.h>
 #include<errno.h>
 #include<netdb.h>
@@ -49,16 +63,34 @@ void readConnection(char *, char [], int);
 void acknowledgeError(int, char []);
 void acknowledgeSuccess(int, char[]);
 int writeWrapper(int, char*, int);
+int takeSemaphore(int, struct sembuf *, int);
 
+union semun {
+    int val;
+    struct semid_ds *buf;
+    unsigned short *array;
+    struct seminfo *__buf;
+};  
 
 pid_t process_id;  // used by forked children to print useful information
-
+int semaphore_id; // semid for file-writing semaphore. Should probably use a better name
 
 int main (int argc, char* argv[]) {
 
     // initialize global file-write semaphore
-    //int sem = semget(IPC_PRIVATE, 1, S_IRUSR | S_IWUSR);
+    semaphore_id = semget(IPC_PRIVATE, 1, S_IRUSR | S_IWUSR);
+    union semun ctl_args;
+    unsigned short val[1] = {1};
+    ctl_args.array = val;
     
+    if (semctl(semaphore_id, 0, SETALL, ctl_args) == -1) {
+        fprintf(stderr, "failed to set semaphore values\n");
+        exit(INIT_ERROR);
+    }   
+ 
+    printf("server semid: %d\n", semaphore_id);
+    
+
     // prepare address info variables 
     struct sockaddr_in servAddr;
     memset(&servAddr, 0, sizeof(servAddr));
@@ -257,16 +289,38 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
 }
 
 // "puts" the client's file on the server
-// relies upon a "write file" mutex that ensures only one
-// client attempts to create a file at a time.
+// relies upon a "write file" mutex to eliminate
+// file check/creation race condition
+
 void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
 
-    // get finary semaphore controlling file writes
-    char response[ARG_MAX_LEN];
+    // init semaphore tools
+    struct sembuf taker;
+    taker.sem_op = -1;
+    taker.sem_flg = IPC_NOWAIT;
+    struct sembuf replacer;    
+    replacer.sem_op = 1;
+   
+    //  beginning attempts for semaphore 
+    int i = 0;
+    while (takeSemaphore(semaphore_id, &taker, 1) == -1) {  // returns -1 upon failure, else 0
+        i++;
+        if (i >= SEM_MAX_TRIES) {
+            acknowledgeError(control_fd, "failed to get file-writing semaphore. Please try again\n");
+            fprintf(stderr, "child %d: semaphore attempt limit exceeded\n", process_id);
+            close(data_fd);
+            return;
+        }
+        sleep(1);
+    }
+
+
+    // investigate existence of given file name
+    char response[ARG_MAX_LEN] = {'\0'};
     if (access(client_arg, F_OK)) {
         int tempno = errno;
         if (tempno == ENOENT) {  // file name not in use
-            int new_fd;
+            int new_fd;  // closes at end of the loop or before returning from a semctl error
             if ( (new_fd = open(client_arg, O_CREAT | O_WRONLY, S_IRWXU | S_IRGRP)) == -1) {  // attempt to create the file
                 strcat(response, strerror(errno));
                 strcat(response, "\n");
@@ -274,10 +328,19 @@ void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
                 fprintf(stderr, "Child %d: error openig new file locally: %s\n", process_id, strerror(errno));         
             }
             else {   // now beginning data transfer
-                //
-                //
-                // NOTE: release the binary semaphore here (i think that's as soon as possible)
-                //
+
+                // the file name is now claimed 
+                // the semaphore is no longer required
+                if (semop(semaphore_id, &replacer, 1) == -1) {
+                    fprintf(stderr, "child %d: unexpected error replacing semaphore: %s\n", process_id, strerror(errno));
+                    char response[ARG_MAX_LEN] = {'\0'};
+                    strcat(response, strerror(errno));
+                    strcat(response, "\n");
+                    acknowledgeError(control_fd, response);
+                    close(new_fd); close(data_fd);
+                    return;
+                }
+                // the file transfer begins 
                 acknowledgeSuccess(control_fd, NULL);
                 int read_bytes, written_bytes;
                 char temp_data[512];
@@ -291,6 +354,7 @@ void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
                     }
                     printf("child %d: wrote %d more bytes to the new file\n", process_id, written_bytes);
                 }
+                // check whether EOF or an error terminated reads 
                 if (read_bytes < 0) {
                     strcat(response, strerror(errno));
                     strcat(response, "\n");
@@ -304,12 +368,18 @@ void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
             fprintf(stderr, "child %d: access call error: %s\n", process_id, strerror(errno));
             strcat(response, strerror(errno));
             strcat(response, "\n");
+            acknowledgeError(control_fd, response);
         }
     }
     else {  // file already exists
         fprintf(stderr, "child %d: File we were asked to create already exists\n", process_id);
-        strcat(response, "That file already exists on the server\n");
+        strcat(response, "That filslefijee already exists on the server\n");
         acknowledgeError(control_fd, response);
+    }
+    
+    // give up the semaphore after handling whatever error lead us here
+    if (semop(semaphore_id, &replacer, 1) == -1) {
+        fprintf(stderr, "child %d: unexpected error replacing semaphore: %s\n", process_id, strerror(errno));
     }
     close(data_fd);
 }
@@ -493,6 +563,7 @@ void acknowledgeError(int control_fd, char errorMsg[]) {
 
 // sends 'A' response to client with optional arg data_port
 // data_port is null if no port number is being sent
+// depends on data_port being null terminated
 void acknowledgeSuccess(int connectfd, char *data_port) {
     
     // longest possible response: 'A' + 5 digit port + \n\0 - \0
@@ -517,8 +588,8 @@ void acknowledgeSuccess(int connectfd, char *data_port) {
    } 
 }
 
-// process exits on error
-int writeWrapper(int fd, char *msg, int write_bytes) {
+//returns -1 upon error, otherwise returns bytes_written
+int writeWrapper (int fd, char *msg, int write_bytes) {
     int bytes_written;
     if ( (bytes_written = write(fd, msg, write_bytes)) == -1) {
         printf("child %d: Error writing to descriptor %d\n", process_id, fd);
@@ -526,3 +597,23 @@ int writeWrapper(int fd, char *msg, int write_bytes) {
     }
     return bytes_written;
 }
+
+
+// attempts to acquire the binary file-write semaphore 
+// return values:    0: semaphore acquired
+//                  -1: semaphore is in use
+//                  -2: semaphore error. Check errno
+int takeSemaphore (int semid, struct sembuf *taker, int nops) {
+
+    if (semop(semid, taker, nops) == -1) {
+        int tempno = errno;
+        if (tempno == EAGAIN) { // semaphore is in use
+            return -1;
+        }
+        else {          
+            return -2;  
+        }
+    }
+    return 0; 
+}
+
