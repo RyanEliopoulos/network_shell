@@ -1,10 +1,6 @@
 /*
  *
  *
- *
- * TODO: remove user execute file permission in localToRemote
- * TODO: set put file creation permissions to -rwxr-----
- * TODO: binary semaphore used to create files
  * TODO: clean up this fucking mess
  *
  * Ryan Paulos
@@ -17,11 +13,7 @@
  * then the initial connection is closed by the server
  * 
  *
- *
- *
  * Note: will really need to take the time to change printf statements to fprint/conditional upon debug mode
- * 
- *
  * 
  */
 
@@ -65,6 +57,8 @@ void acknowledgeSuccess(int, char[]);
 int writeWrapper(int, char*, int);
 int takeSemaphore(int, struct sembuf *, int);
 
+
+// required for semaphore use
 union semun {
     int val;
     struct semid_ds *buf;
@@ -72,8 +66,8 @@ union semun {
     struct seminfo *__buf;
 };  
 
-pid_t process_id;  // used by forked children to print useful information
-int semaphore_id; // semid for file-writing semaphore. Should probably use a better name
+pid_t process_id;   // used by forked children to print useful information
+int semaphore_id;   // semid for file-writing semaphore. 
 
 int main (int argc, char* argv[]) {
 
@@ -87,9 +81,7 @@ int main (int argc, char* argv[]) {
         fprintf(stderr, "failed to set semaphore values\n");
         exit(INIT_ERROR);
     }   
- 
     printf("server semid: %d\n", semaphore_id);
-    
 
     // prepare address info variables 
     struct sockaddr_in servAddr;
@@ -291,7 +283,6 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
 // "puts" the client's file on the server
 // relies upon a "write file" mutex to eliminate
 // file check/creation race condition
-
 void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
 
     // init semaphore tools
@@ -313,7 +304,6 @@ void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
         }
         sleep(1);
     }
-
 
     // investigate existence of given file name
     char response[ARG_MAX_LEN] = {'\0'};
@@ -388,12 +378,12 @@ void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
 //  server's response to the 'G' command
 void localToRemote (int control_fd, int data_fd, char *client_arg) {
    
-    // if (client_arg not in restricted list)  
-    
     // init vars 
     char response[ARG_MAX_LEN] = {'\0'};  // error response string
     FILE *file;                           // stream for desired file
     struct stat file_info;               
+
+    // check if specific file is a valid option
     if (stat(client_arg, &file_info) == -1) {
         strcat(response, strerror(errno));    
         strcat(response, "\n");             // strerror doesn't supply a newline
@@ -411,6 +401,7 @@ void localToRemote (int control_fd, int data_fd, char *client_arg) {
     else {  // at this point the file has been opened successfully
         acknowledgeSuccess(control_fd, NULL); 
 
+        // transfer file data from local file to data connection
         char file_chunk[512] = {'\0'};
         int read;
         while ( (read = fread(file_chunk, sizeof(char), 511, file)) == 511) {
@@ -474,6 +465,14 @@ void listDir(int data_fd) {
         execlp("ls", "ls", "-l", (char *) NULL);
     }
     else {
+        int child_return_status;
+        wait(&child_return_status);
+        if (WIFEXITED(child_return_status)) {
+            printf("child %d: ls -l child process exited normally\n", process_id);
+        }
+        else {
+            printf("child %d: ls -l child process did not exit normally\n", process_id);
+        }
         close(data_fd);
     }
 }
@@ -537,8 +536,6 @@ void buildDataConnection (int *data_fd, int control_fd) {
 
     // cleanup listener
     close(listenfd);
-    // send acnowledgement to client
-    //acknowledgeSuccess(control_fd, NULL);  // This is a mistake.  
     // push the data connection fd down the stack
     *data_fd = tempfd;
 }
