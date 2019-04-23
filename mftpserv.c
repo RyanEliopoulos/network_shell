@@ -1,7 +1,9 @@
 /*
  *
- *
+ * TODO: add return values to command fnxs to meet spec need of printing command outcome
  * TODO: clean up this fucking mess
+ * TODO: test rogue command inquiries once our client is up to it
+ * TODO: add semaphore release function. We short-circuited the relase in remoteToLocal by adding all those return statements
  *
  * Ryan Paulos
  * CS 360 Final Project
@@ -25,6 +27,7 @@
 #define CONN_ERROR 2  // failure establishing initial connection with client
 #define COMM_ERROR 3  // This should be changed to RD_ERRORfatal error reading from TCP client connection 
 #define WRT_ERROR 4   // error writing to 
+#define SEM_ERROR 5   // error manipulating the file-write semaphore. Fatal.
 
 #define DEBUG 0
 #define ARG_MAX_LEN 4096  // longest possible transmission across connections
@@ -46,11 +49,11 @@
 #include<sys/stat.h>
 
 void controlLoop(int);
-void remoteToLocal(int, int, char*);
-void localToRemote(int, int, char*);
-void cwd(int, char *);
-void listDir(int);
-void buildDataConnection(int *, int);
+int remoteToLocal(int, int, char*);
+int localToRemote(int, int, char*);
+int cwd(int, char *);
+int listDir(int);
+int buildDataConnection(int *, int);
 void readConnection(char *, char [], int);
 void acknowledgeError(int, char []);
 void acknowledgeSuccess(int, char[]);
@@ -170,63 +173,80 @@ void controlLoop(int connectfd) {
         /* handling the command value as needed */
         switch (cmd) {
             case 'D':       // establish data connection
-                printf("child %d: Server received command D\n", process_id);
+                printf("child %d: Server received command D with argument <%s>\n", process_id, client_arg);
                 if (data_fd != -1) {
-                    printf("child %d: tearing down unused data connection and building a new one\n", process_id);
+                    printf("child %d: tearing down unused data connection and building a new one\n", process_id);  // DEBUG print statement
                     close(data_fd);
                     data_fd = -1;
                 }
-                buildDataConnection(&data_fd, connectfd);
-                printf("child %d: back in control loop. data_fd is %d\n", process_id, data_fd);
-                break;
-            case 'C':       // rwd
-                printf("child %d: Server received command C\n", process_id);
-                printf("child %d: Received pathname: %s\n", process_id, client_arg);
-                cwd(connectfd, client_arg);
-                printf("child %d: server has returned from cwd call\n", process_id);
-                break;
-            case 'L':       // rls
-                printf("child %d: Server received comman L\n", process_id);
-                if (data_fd == -1) {  // no data connection
-                    acknowledgeError(connectfd, "Command 'L' requires a data connection\n");
-                    printf("child %d: Client must first request a data connection\n", process_id);
+                if (buildDataConnection(&data_fd, connectfd) == -1) {
+                    printf("child %d: failed to establish data connection\n", process_id);
                 }
                 else {
-                    printf("child %d: about to fork ls -l command\n", process_id);
-                    acknowledgeSuccess(connectfd, NULL);
-                    listDir(data_fd);     // exec ls -l. closes data_fd
-                    data_fd = -1;         // set no connectin flag
-                    printf("child %d: data connection file descriptor has been closed\n", process_id);
+                    printf("child %d: data connection successfully established\n", process_id);
                 }
-                printf("child %d: rls command complete\n", process_id);
+                printf("child %d: back in control loop. data_fd is %d\n", process_id, data_fd);  // DEBUG
+                break;
+            case 'C':       // rwd
+                printf("child %d: Server received command C with argument <%s>\n", process_id, client_arg);
+                if (cwd(connectfd, client_arg) == -1) {
+                    printf("child %d: failed to change directory\n", process_id);
+                }
+                else {
+                    printf("child %d: successfully changed directory\n", process_id);
+                }
+                break;
+            case 'L':       // rls
+                printf("child %d: Server received command L with argument <%s>\n", process_id, client_arg);
+                if (data_fd == -1) {  // no data connection
+                    acknowledgeError(connectfd, "Command 'L' requires a data connection\n");
+                    printf("child %d: Client must first request a data connection\n", process_id);  // DEBUG
+                }
+                else {
+                    printf("child %d: about to fork ls -l command\n", process_id); // DEBUG
+                    acknowledgeSuccess(connectfd, NULL);
+                    if (listDir(data_fd) == -1) {  // exec ls -l. closes data_fd
+                        printf("child %d: error occurred in rls child process\n", process_id);
+                    }   
+                    else {
+                        printf("child %d: successfully executed command 'L'\n", process_id);
+                    }
+                    data_fd = -1;         // set no connectin flag
+                    printf("child %d: data connection file descriptor has been closed\n", process_id);    // DEBUG
+                }
                 break;
             case 'G':      
-                printf("child %d: Server received command G\n", process_id);
+                printf("child %d: Server received command G with argument <%s>\n", process_id, client_arg);
                 if (data_fd == -1) {
                     acknowledgeError(connectfd, "Command 'G' requires a data connection\n");
                     fprintf(stderr, "child %d: Command 'G' requires a data connection\n", process_id);
                 }
                 else {
-                    localToRemote(connectfd, data_fd, client_arg);
+                    if (localToRemote(connectfd, data_fd, client_arg) == -1) {
+                        printf("child %d: failed to transfer file to client\n", process_id);
+                    }
+                    else {
+                        printf("child %d: successfully transferred file to client\n", process_id);
+                    }
                     data_fd = -1;
-                    printf("child %d: completed localToRemote\n", process_id);
                 }
                 break;
             case 'P':     
-                printf("child %d:Server received command P\n", process_id);
-                printf("child %d:received pathname: %s\n", process_id, client_arg);
+                printf("child %d:Server received command P with argument <%s>\n", process_id, client_arg);
                 if (data_fd == -1) {
                     acknowledgeError(connectfd, "Command 'P' requires a data connection\n");
                     printf("Child %d: Command 'P' requires client to establish data connection\n", process_id);
                 }
                 else {
-                    /* localFromRemote() */  // the data connection will be closed in this function
-
-                    // actually like remoteToLocal() better
-                    remoteToLocal(connectfd, data_fd, client_arg);
+                    if (remoteToLocal(connectfd, data_fd, client_arg) == -1) {
+                        printf("Child %d: failed to successfully write file from client\n", process_id);
+                        //
+                        //
+                    }
+                    else {
+                        printf("Child %d: successfully wrote file from client\n", process_id);
+                    }
                     data_fd = -1;
-                    printf("child %d: The data connection has been closed\n", process_id); 
-                    printf("Child %d: put command complete\n", process_id);
                 }
                 break;
             case 'Q':    // quit
@@ -283,7 +303,7 @@ void readConnection (char *cmd, char client_arg[], int connectfd) {
 // "puts" the client's file on the server
 // relies upon a "write file" mutex to eliminate
 // file check/creation race condition
-void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
+int remoteToLocal (int control_fd, int data_fd, char *client_arg) {
 
     // init semaphore tools
     struct sembuf taker;
@@ -300,7 +320,7 @@ void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
             acknowledgeError(control_fd, "failed to get file-writing semaphore. Please try again\n");
             fprintf(stderr, "child %d: semaphore attempt limit exceeded\n", process_id);
             close(data_fd);
-            return;
+            return -1;
         }
         sleep(1);
     }
@@ -315,20 +335,21 @@ void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
                 strcat(response, strerror(errno));
                 strcat(response, "\n");
                 acknowledgeError(control_fd, response);
+                close(data_fd);
                 fprintf(stderr, "Child %d: error openig new file locally: %s\n", process_id, strerror(errno));         
+                return -1;
             }
             else {   // now beginning data transfer
 
-                // the file name is now claimed 
                 // the semaphore is no longer required
                 if (semop(semaphore_id, &replacer, 1) == -1) {
-                    fprintf(stderr, "child %d: unexpected error replacing semaphore: %s\n", process_id, strerror(errno));
+                    fprintf(stderr, "child %d: unexpected fatal error replacing semaphore: %s\n", process_id, strerror(errno));
                     char response[ARG_MAX_LEN] = {'\0'};
                     strcat(response, strerror(errno));
                     strcat(response, "\n");
                     acknowledgeError(control_fd, response);
                     close(new_fd); close(data_fd);
-                    return;
+                    exit(SEM_ERROR);
                 }
                 // the file transfer begins 
                 acknowledgeSuccess(control_fd, NULL);
@@ -340,7 +361,8 @@ void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
                         strcat(response, strerror(errno));
                         strcat(response, "\n");
                         fprintf(stderr, "child %d: error writing to local file: %s\n", process_id, strerror(errno));
-                        break;
+                        close(data_fd); close(new_fd);
+                        return -1;
                     }
                     printf("child %d: wrote %d more bytes to the new file\n", process_id, written_bytes);
                 }
@@ -349,6 +371,8 @@ void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
                     strcat(response, strerror(errno));
                     strcat(response, "\n");
                     fprintf(stderr, "child %d: error reading from data connection: %s\n", process_id, strerror(errno));
+                    close(data_fd); close(new_fd);
+                    return -1;
                 }
                 printf("child %d: reached EOF reading from data connection\n", process_id);
                 close(new_fd);
@@ -359,24 +383,31 @@ void remoteToLocal (int control_fd, int data_fd, char *client_arg) {
             strcat(response, strerror(errno));
             strcat(response, "\n");
             acknowledgeError(control_fd, response);
+            close(data_fd);
+            return -1;
         }
     }
     else {  // file already exists
         fprintf(stderr, "child %d: File we were asked to create already exists\n", process_id);
         strcat(response, "That filslefijee already exists on the server\n");
         acknowledgeError(control_fd, response);
+        close(data_fd);
+        return -1;
     }
     
     // give up the semaphore after handling whatever error lead us here
     if (semop(semaphore_id, &replacer, 1) == -1) {
-        fprintf(stderr, "child %d: unexpected error replacing semaphore: %s\n", process_id, strerror(errno));
+        fprintf(stderr, "child %d: unexpected fatal error replacing semaphore: %s\n", process_id, strerror(errno));
+        close(data_fd);
+        exit(SEM_ERROR);
     }
     close(data_fd);
+    return 0;
 }
 
 //  writes a local file to the data connection
 //  server's response to the 'G' command
-void localToRemote (int control_fd, int data_fd, char *client_arg) {
+int localToRemote (int control_fd, int data_fd, char *client_arg) {
    
     // init vars 
     char response[ARG_MAX_LEN] = {'\0'};  // error response string
@@ -411,7 +442,7 @@ void localToRemote (int control_fd, int data_fd, char *client_arg) {
             if (writeWrapper(data_fd, file_chunk, 512) == -1) {
                 fprintf(stderr, "child %d: Error writing file to data connection\n", process_id);
                 close(data_fd);
-                return;
+                return -1;
             }
         }
         // Now check if there was an fread error.
@@ -420,14 +451,18 @@ void localToRemote (int control_fd, int data_fd, char *client_arg) {
         if (feof(file)) {  
             if (writeWrapper(data_fd, file_chunk, read) == -1) {
                 fprintf(stderr, "child %d: Error writing final final chunk to data connection\n", process_id);
+                close(data_fd);
+                return -1;
             }
             // file successfully written.
         } 
         else {   // an fread error occurred :(
+            close(data_fd);
             fprintf(stderr, "child %d: Encountered fread error transfering file to client\n", process_id);
+            return -1;
         }
         close(data_fd);
-        return;
+        return 0;
     }
 
     /* this covers error response for the first      */
@@ -437,27 +472,30 @@ void localToRemote (int control_fd, int data_fd, char *client_arg) {
     acknowledgeError(control_fd, response);
     printf("acknowledging error to client\n");
     close(data_fd);
+    return -1;
 }
 
 // attempts to change server's working diretory to client_arg
-void cwd (int control_connection, char *client_arg) {
+int cwd (int control_connection, char *client_arg) {
 
     int ret;
     if ( (ret = chdir(client_arg)) == -1) {
         char response[ARG_MAX_LEN] = {'\0'};
         acknowledgeError(control_connection, "directory doesn't fucking exist yo\n");
-        printf("child %d: failed to change directory\n%s\n", process_id, strerror(errno));
+        printf("child %d: failed to change directory\n%s\n", process_id, strerror(errno));  // DEBUG
+        return -1;
     }
     else {
         acknowledgeSuccess(control_connection, NULL);
-        printf("child %d: successfully changed directories\n", process_id);
+        printf("child %d: successfully changed directories\n", process_id);  // DEBUG
+        return 0;
     }
 }
 
 
 // forks call to exec(ls -l)
 // remember to close the data_fd after fork
-void listDir(int data_fd) {
+int listDir(int data_fd) {
     if (!fork()) {
         close(1);   // make room for data_fd
         dup(data_fd);
@@ -467,18 +505,16 @@ void listDir(int data_fd) {
     else {
         int child_return_status;
         wait(&child_return_status);
-        if (WIFEXITED(child_return_status)) {
-            printf("child %d: ls -l child process exited normally\n", process_id);
-        }
-        else {
-            printf("child %d: ls -l child process did not exit normally\n", process_id);
-        }
         close(data_fd);
+        if (WIFEXITED(child_return_status)) {
+            return 0;
+        }
+        return -1;
     }
 }
 
 // establishes data connection data_fd with client
-void buildDataConnection (int *data_fd, int control_fd) {
+int buildDataConnection (int *data_fd, int control_fd) {
 
     // prepare port address info variables  
     struct sockaddr_in data_addr;
@@ -495,7 +531,7 @@ void buildDataConnection (int *data_fd, int control_fd) {
         fprintf(stderr, "child %d: %s\n", process_id, strerror(errno));
         // write error to client
         acknowledgeError(control_fd, "Could not establish data socket\n");
-        return;
+        return -1;
     }
     printf("child %d: created new data socket on descriptor %d\n", process_id, listenfd); 
 
@@ -503,14 +539,14 @@ void buildDataConnection (int *data_fd, int control_fd) {
         fprintf(stderr, "child %d: Error binding the data connection socket\n", process_id);
         fprintf(stderr, "child %d: %s\n", process_id, strerror(errno));
         acknowledgeError(control_fd, "Could not bind data socket\n");
-        return;
+        return -1;
     } 
 
     if (listen(listenfd, 0) == -1) {
         fprintf(stderr, "child %d: listen call for data connection failed\n", process_id);
         fprintf(stderr, "child %d: %s\n", process_id, strerror(errno));
         acknowledgeError(control_fd, "Could not listen on data socket\n");
-        return; 
+        return -1; 
     }
 
     // retrieve the port number of the new socket
@@ -530,7 +566,7 @@ void buildDataConnection (int *data_fd, int control_fd) {
     if ( (tempfd = accept(listenfd, (struct sockaddr *)NULL, NULL)) == -1) {
         fprintf(stderr, "child %d: encountered error accepting data connection\n%s\n", process_id, strerror(errno));
         close(listenfd);
-        return;
+        return -1;
     }
     printf("child %d: accepted new port fd: %d\n", process_id, tempfd);
 
@@ -538,6 +574,7 @@ void buildDataConnection (int *data_fd, int control_fd) {
     close(listenfd);
     // push the data connection fd down the stack
     *data_fd = tempfd;
+    return 0;
 }
 
 // response over control connection indicating previos command failed
