@@ -143,7 +143,6 @@ int main (int argc, char* argv[]) {
                 printf("failed to get host by addr\n"); 
             }
             else {
-                if (DEBUG) printf("got the fucking thing\n");
                 hostname = hostEntry->h_name;
                 printf(" the hostname: %s\n", hostname);
             }
@@ -480,8 +479,7 @@ int cwd (int control_connection, char *client_arg) {
 
     int ret;
     if ( (ret = chdir(client_arg)) == -1) {
-        char response[ARG_MAX_LEN] = {'\0'};
-        acknowledgeError(control_connection, "directory doesn't fucking exist yo\n");
+        acknowledgeError(control_connection, "unable to change directory\n");
         printf("child %d: failed to change directory\n%s\n", process_id, strerror(errno));  // DEBUG
         return -1;
     }
@@ -583,11 +581,16 @@ void acknowledgeError(int control_fd, char errorMsg[]) {
     
     char response[ARG_MAX_LEN] = {'\0'};  // construct response string
     response[0] = 'E'; 
-    strncat(response+1, errorMsg, ARG_MAX_LEN-3);
-    printf("child %d: error message written to client: %s\n", process_id, response);
+    printf("error response is now <%s>\ncatting the error message", response);
+    strcat(response, errorMsg);
+    response[ARG_MAX_LEN-1] = '\0';
+    printf("error message is now <%s>\n", response); 
+    //strncat(response+3, errorMsg, ARG_MAX_LEN-3);
+    printf("child %d: error message written to client: <%s>\n", process_id, response);
     int i = 0;
-    while ( errorMsg[i] != '\0') {
-        if (writeWrapper(control_fd, &(errorMsg[i]), 1) == -1) {
+    while ( response[i] != '\0') {
+        printf("child %d: Writing errors - character <%c> to control connection\n", process_id, response[i]);
+        if (writeWrapper(control_fd, &(response[i]), 1) == -1) {
             fprintf(stderr, "child %d: encountered error writing to control channel. Fatal\n", process_id);
             exit(WRT_ERROR);
         }
