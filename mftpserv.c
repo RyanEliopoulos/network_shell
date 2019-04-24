@@ -17,6 +17,10 @@
  *
  * Note: will really need to take the time to change printf statements to fprint/conditional upon debug mode
  * 
+ *
+ *
+ * Note: Originally all command functions were void and fell through. But I decided they should return
+ *       their outcome status instead. Now they look stupid. And they violate DRY pretty hard now. ugh.
  */
 
 
@@ -59,6 +63,7 @@ void acknowledgeError(int, char []);
 void acknowledgeSuccess(int, char[]);
 int writeWrapper(int, char*, int);
 int takeSemaphore(int, struct sembuf *, int);
+void releaseSemaphore(int, struct sembuf *, int);
 
 
 // required for semaphore use
@@ -336,6 +341,7 @@ int remoteToLocal (int control_fd, int data_fd, char *client_arg) {
                 acknowledgeError(control_fd, response);
                 close(data_fd);
                 fprintf(stderr, "Child %d: error openig new file locally: %s\n", process_id, strerror(errno));         
+                releaseSemaphore(semaphore_id, &replacer, 1);  // process exits upon failure
                 return -1;
             }
             else {   // now beginning data transfer
@@ -361,6 +367,7 @@ int remoteToLocal (int control_fd, int data_fd, char *client_arg) {
                         strcat(response, "\n");
                         fprintf(stderr, "child %d: error writing to local file: %s\n", process_id, strerror(errno));
                         close(data_fd); close(new_fd);
+                        releaseSemaphore(semaphore_id, &replacer, 1);  // process exits upon failure
                         return -1;
                     }
                     printf("child %d: wrote %d more bytes to the new file\n", process_id, written_bytes);
@@ -371,6 +378,7 @@ int remoteToLocal (int control_fd, int data_fd, char *client_arg) {
                     strcat(response, "\n");
                     fprintf(stderr, "child %d: error reading from data connection: %s\n", process_id, strerror(errno));
                     close(data_fd); close(new_fd);
+                    releaseSemaphore(semaphore_id, &replacer, 1);  // process exits upon failure
                     return -1;
                 }
                 printf("child %d: reached EOF reading from data connection\n", process_id);
@@ -383,6 +391,7 @@ int remoteToLocal (int control_fd, int data_fd, char *client_arg) {
             strcat(response, "\n");
             acknowledgeError(control_fd, response);
             close(data_fd);
+            releaseSemaphore(semaphore_id, &replacer, 1);  // process exits upon failure
             return -1;
         }
     }
@@ -391,15 +400,11 @@ int remoteToLocal (int control_fd, int data_fd, char *client_arg) {
         strcat(response, "That filslefijee already exists on the server\n");
         acknowledgeError(control_fd, response);
         close(data_fd);
+        releaseSemaphore(semaphore_id, &replacer, 1);  // process exits upon failure
         return -1;
     }
     
-    // give up the semaphore after handling whatever error lead us here
-    if (semop(semaphore_id, &replacer, 1) == -1) {
-        fprintf(stderr, "child %d: unexpected fatal error replacing semaphore: %s\n", process_id, strerror(errno));
-        close(data_fd);
-        exit(SEM_ERROR);
-    }
+    releaseSemaphore(semaphore_id, &replacer, 1);  // process exits upon failure
     close(data_fd);
     return 0;
 }
@@ -492,7 +497,6 @@ int cwd (int control_connection, char *client_arg) {
 
 
 // forks call to exec(ls -l)
-// remember to close the data_fd after fork
 int listDir(int data_fd) {
     if (!fork()) {
         close(1);   // make room for data_fd
@@ -585,7 +589,6 @@ void acknowledgeError(int control_fd, char errorMsg[]) {
     strcat(response, errorMsg);
     response[ARG_MAX_LEN-1] = '\0';
     printf("error message is now <%s>\n", response); 
-    //strncat(response+3, errorMsg, ARG_MAX_LEN-3);
     printf("child %d: error message written to client: <%s>\n", process_id, response);
     int i = 0;
     while ( response[i] != '\0') {
@@ -654,3 +657,10 @@ int takeSemaphore (int semid, struct sembuf *taker, int nops) {
     return 0; 
 }
 
+// fatal upon error. Relies upon caller to actually have acquired the semaphore
+void releaseSemaphore (int semid, struct sembuf *replacer, int nops) {
+    if (semop(semid, replacer, nops) == -1) {
+        fprintf(stderr, "child %d: fatal error attempting to release semaphore\n", process_id);      
+        exit(SEM_ERROR);
+    }
+}
