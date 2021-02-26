@@ -21,7 +21,8 @@ directory of the client process while "rls" prints the working directory on the 
 
 
 #### Connecting to the server
-As seen above, provide the IP address of the server as arg1.  Defaults to port 49999
+As seen above, users can provide the IP address of the server as arg1. The program will also resolve valid hostnames with DNS. 
+Defaults to port 49999.
 
 
 #### Commands
