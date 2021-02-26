@@ -20,7 +20,7 @@ directory of the client process while "rls" prints the working directory on the 
 ![image](./screenshots/ls_rls.png)
 
 
-##### Connecting to the server
+#### Connecting to the server
 As seen above, provide the IP address of the server as arg1.  Defaults to port 49999
 
 
