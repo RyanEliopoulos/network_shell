@@ -1,6 +1,6 @@
 # Networked Shell
 Networked Shell is a Linux shell with a number of built in utilities facilitating file exploration and file transfer 
-between two computers.
+between two computers.  It employs the client/server model.
 
 ### Server
 The server runs as a daemon listening for connections on port 49999. The daemon forks a child process to handle each
