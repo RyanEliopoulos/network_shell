@@ -1,0 +1,6 @@
+These "old" files are the latest versions that were in my original repository.  At some point I switched development
+over to the school servers and didn't push to remote. The original repository was lost. Fortunately I emailed myself
+a version of the client and server that was (at least close to) finalized and I rebuilt the project.
+Didn't have the header file, though :(.
+
+Anyway, I was able to get it up and running again so that's cool.
