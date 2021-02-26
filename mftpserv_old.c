@@ -1,5 +1,9 @@
 /*
  *
+ * TODO: add return values to command fnxs to meet spec need of printing command outcome
+ * TODO: clean up this fucking mess
+ * TODO: test rogue command inquiries once our client is up to it
+ * TODO: add semaphore release function. We short-circuited the relase in remoteToLocal by adding all those return statements
  *
  * Ryan Paulos
  * CS 360 Final Project
@@ -20,6 +24,19 @@
  */
 
 
+#define MY_PORT_NUMBER 49999
+
+/* error definitions */
+#define INIT_ERROR 1  // failure initializing server for accept state
+#define CONN_ERROR 2  // failure establishing initial connection with client
+#define COMM_ERROR 3  // This should be changed to RD_ERRORfatal error reading from TCP client connection 
+#define WRT_ERROR 4   // error writing to 
+#define SEM_ERROR 5   // error manipulating the file-write semaphore. Fatal.
+
+#define DEBUG 0
+#define ARG_MAX_LEN 4096  // longest possible transmission across connections
+#define SEM_MAX_TRIES 3   // Number of times the process attempts to get the file-writing semaphore before responding with an error
+
 #include<sys/sem.h>
 #include<sys/ipc.h>
 #include<fcntl.h>
@@ -34,17 +51,19 @@
 #include<sys/wait.h>
 #include<arpa/inet.h>
 #include<sys/stat.h>
-#include"mftp.h"
 
 void controlLoop(int);
 int remoteToLocal(int, int, char*);
 int localToRemote(int, int, char*);
+int cwd(int, char *);
 int listDir(int);
-int cwd (int, char *);
 int buildDataConnection(int *, int);
 void readConnection(char *, char [], int);
 void acknowledgeError(int, char []);
 void acknowledgeSuccess(int, char[]);
+int writeWrapper(int, char*, int);
+int takeSemaphore(int, struct sembuf *, int);
+void releaseSemaphore(int, struct sembuf *, int);
 
 
 // required for semaphore use
@@ -85,7 +104,7 @@ int main (int argc, char* argv[]) {
 
     // create and bind the socket
     listenfd = socket(AF_INET, SOCK_STREAM, 0);
-    //printf("listenfd is set to %d\n", listenfd);
+    printf("listenfd is set to %d\n", listenfd);
     if (bind(listenfd, (struct sockaddr *) &servAddr, sizeof(servAddr)) < 0) {
         perror("bind error\n");
         exit(INIT_ERROR);
@@ -102,7 +121,7 @@ int main (int argc, char* argv[]) {
             perror("error accepting incoming connections\n");
             exit(CONN_ERROR);
         }
-        //if (DEBUG) printf("connectfd is set to %d\n", connectfd);
+        if (DEBUG) printf("connectfd is set to %d\n", connectfd);
         // then fork the primary logic
         if (fork()) {
             if (close(connectfd) == -1) {
@@ -158,9 +177,9 @@ void controlLoop(int connectfd) {
         /* handling the command value as needed */
         switch (cmd) {
             case 'D':       // establish data connection
-                if (DEBUG) printf("child %d: Server received command D with argument <%s>\n", process_id, client_arg);
+                printf("child %d: Server received command D with argument <%s>\n", process_id, client_arg);
                 if (data_fd != -1) {
-                    if (DEBUG) printf("child %d: tearing down unused data connection and building a new one\n", process_id);  // DEBUG print statement
+                    printf("child %d: tearing down unused data connection and building a new one\n", process_id);  // DEBUG print statement
                     close(data_fd);
                     data_fd = -1;
                 }
@@ -170,9 +189,10 @@ void controlLoop(int connectfd) {
                 else {
                     printf("child %d: data connection successfully established\n", process_id);
                 }
-                if (DEBUG) printf("child %d: back in control loop. data_fd is %d\n", process_id, data_fd);  // DEBUG
+                printf("child %d: back in control loop. data_fd is %d\n", process_id, data_fd);  // DEBUG
                 break;
             case 'C':       // rwd
+                printf("child %d: Server received command C with argument <%s>\n", process_id, client_arg);
                 if (cwd(connectfd, client_arg) == -1) {
                     printf("child %d: failed to change directory\n", process_id);
                 }
@@ -181,12 +201,13 @@ void controlLoop(int connectfd) {
                 }
                 break;
             case 'L':       // rls
-                if (DEBUG) printf("child %d: Server received command L with argument <%s>\n", process_id, client_arg);
+                printf("child %d: Server received command L with argument <%s>\n", process_id, client_arg);
                 if (data_fd == -1) {  // no data connection
                     acknowledgeError(connectfd, "Command 'L' requires a data connection\n");
                     printf("child %d: Client must first request a data connection\n", process_id);  // DEBUG
                 }
                 else {
+                    printf("child %d: about to fork ls -l command\n", process_id); // DEBUG
                     acknowledgeSuccess(connectfd, NULL);
                     if (listDir(data_fd) == -1) {  // exec ls -l. closes data_fd
                         printf("child %d: error occurred in rls child process\n", process_id);
@@ -195,10 +216,11 @@ void controlLoop(int connectfd) {
                         printf("child %d: successfully executed command 'L'\n", process_id);
                     }
                     data_fd = -1;         // set no connectin flag
+                    printf("child %d: data connection file descriptor has been closed\n", process_id);    // DEBUG
                 }
                 break;
             case 'G':      
-                //printf("child %d: Server received command G with argument <%s>\n", process_id, client_arg);
+                printf("child %d: Server received command G with argument <%s>\n", process_id, client_arg);
                 if (data_fd == -1) {
                     acknowledgeError(connectfd, "Command 'G' requires a data connection\n");
                     fprintf(stderr, "child %d: Command 'G' requires a data connection\n", process_id);
@@ -214,7 +236,7 @@ void controlLoop(int connectfd) {
                 }
                 break;
             case 'P':     
-                if (DEBUG) printf("child %d:Server received command P with argument <%s>\n", process_id, client_arg);
+                printf("child %d:Server received command P with argument <%s>\n", process_id, client_arg);
                 if (data_fd == -1) {
                     acknowledgeError(connectfd, "Command 'P' requires a data connection\n");
                     printf("Child %d: Command 'P' requires client to establish data connection\n", process_id);
@@ -232,7 +254,7 @@ void controlLoop(int connectfd) {
                 }
                 break;
             case 'Q':    // quit
-                printf("child %d: received exit signal. Exiting.\n", process_id);
+                printf("child %d:Server received command Q\n", process_id);
                 if (data_fd != -1) close(data_fd);
                 acknowledgeSuccess(connectfd, NULL);
                 exit(0);
@@ -249,6 +271,37 @@ void controlLoop(int connectfd) {
             client_arg[i] = '\0';
         }
     }
+}
+
+// responsible for read() calls on the TCP connection
+// relays this info back to controlLoop
+void readConnection (char *cmd, char client_arg[], int connectfd) {
+
+    // First get the command
+    if (read(connectfd, cmd, 1) == 0) {
+        printf("child %d: unexpected EOF reading command..terminating\n", process_id); 
+        //perror("Unexpected EOF reading command...terminating\n");
+        exit(COMM_ERROR);
+    }
+    printf("child %d: Read %c from the control connection\n", process_id, *cmd);
+    // command has been read. Now for the argument, if any    
+    int i = 0;              // index for path
+    while (i < ARG_MAX_LEN - 1) {      // longest possibl argument accepted from client
+
+        // read next character
+        if (read(connectfd, &client_arg[i], 1) == 0) {
+            printf("child %d: unexpected EOF reading argumet from client..terminating\n", process_id);
+            //perror("Unexepcted EOF reading argument from client..terminating\n");
+            exit(COMM_ERROR);
+        }
+        if (client_arg[i] == '\n') {      // check for command termination
+            client_arg[i] = '\0';         // place real terminator if so
+            printf("child %d: Argument from control connection: <%s>\n", process_id, client_arg);
+            return;
+        }
+        i++;                        // otherwise increment and continue
+    }
+    client_arg[ARG_MAX_LEN-1] = '\0';
 }
 
 // "puts" the client's file on the server
@@ -269,7 +322,7 @@ int remoteToLocal (int control_fd, int data_fd, char *client_arg) {
         i++;
         if (i >= SEM_MAX_TRIES) {
             acknowledgeError(control_fd, "failed to get file-writing semaphore. Please try again\n");
-            printf("child %d: semaphore attempt limit exceeded\n", process_id);
+            fprintf(stderr, "child %d: semaphore attempt limit exceeded\n", process_id);
             close(data_fd);
             return -1;
         }
@@ -317,7 +370,7 @@ int remoteToLocal (int control_fd, int data_fd, char *client_arg) {
                         releaseSemaphore(semaphore_id, &replacer, 1);  // process exits upon failure
                         return -1;
                     }
-                    if (DEBUG) printf("child %d: wrote %d more bytes to the new file\n", process_id, written_bytes);
+                    printf("child %d: wrote %d more bytes to the new file\n", process_id, written_bytes);
                 }
                 // check whether EOF or an error terminated reads 
                 if (read_bytes < 0) {
@@ -344,7 +397,7 @@ int remoteToLocal (int control_fd, int data_fd, char *client_arg) {
     }
     else {  // file already exists
         fprintf(stderr, "child %d: File we were asked to create already exists\n", process_id);
-        strcat(response, "That file already exists on the server\n");
+        strcat(response, "That filslefijee already exists on the server\n");
         acknowledgeError(control_fd, response);
         close(data_fd);
         releaseSemaphore(semaphore_id, &replacer, 1);  // process exits upon failure
@@ -390,7 +443,7 @@ int localToRemote (int control_fd, int data_fd, char *client_arg) {
             /* upon write failure the server will return to the control loop   */
             /* looking for further commands. If client disconnected it will be */
             /* handled there                                                   */
-            if (writeWrapper(data_fd, file_chunk, 511) == -1) {
+            if (writeWrapper(data_fd, file_chunk, 512) == -1) {
                 fprintf(stderr, "child %d: Error writing file to data connection\n", process_id);
                 close(data_fd);
                 return -1;
@@ -421,18 +474,18 @@ int localToRemote (int control_fd, int data_fd, char *client_arg) {
     /* any errors after opening the file are handled */
     /* in the outer else clause                      */
     acknowledgeError(control_fd, response);
-    if (DEBUG) printf("acknowledging error to client\n");
+    printf("acknowledging error to client\n");
     close(data_fd);
     return -1;
 }
 
-// attempts to change the local working diretory to client_arg
-int cwd (int control_connection, char *path) {
+// attempts to change server's working diretory to client_arg
+int cwd (int control_connection, char *client_arg) {
 
     int ret;
-    if ( (ret = chdir(path)) == -1) {
+    if ( (ret = chdir(client_arg)) == -1) {
         acknowledgeError(control_connection, "unable to change directory\n");
-        fprintf(stderr, "child %d: failed to change directory\n%s\n", process_id, strerror(errno));  // DEBUG
+        printf("child %d: failed to change directory\n%s\n", process_id, strerror(errno));  // DEBUG
         return -1;
     }
     else {
@@ -462,37 +515,6 @@ int listDir(int data_fd) {
     }
 }
 
-// responsible for read() calls on the TCP connection
-// relays this info back to controlLoop
-void readConnection (char *cmd, char client_arg[], int connectfd) {
-
-    // First get the command
-    if (read(connectfd, cmd, 1) == 0) {
-        fprintf(stderr, "child %d: unexpected EOF reading command..terminating\n", process_id); 
-        //perror("Unexpected EOF reading command...terminating\n");
-        exit(COMM_ERROR);
-    }
-    //printf("child %d: Read %c from the control connection\n", process_id, *cmd);
-    // command has been read. Now for the argument, if any    
-    int i = 0;              // index for path
-    while (i < ARG_MAX_LEN - 1) {      // longest possibl argument accepted from client
-
-        // read next character
-        if (read(connectfd, &client_arg[i], 1) == 0) {
-            fprintf(stderr, "child %d: unexpected EOF reading argumet from client..terminating\n", process_id);
-            //perror("Unexepcted EOF reading argument from client..terminating\n");
-            exit(COMM_ERROR);
-        }
-        if (client_arg[i] == '\n') {      // check for command termination
-            client_arg[i] = '\0';         // place real terminator if so
-            if (DEBUG) printf("child %d: Argument from control connection: <%s>\n", process_id, client_arg);
-            return;
-        }
-        i++;                        // otherwise increment and continue
-    }
-    client_arg[ARG_MAX_LEN-1] = '\0';
-}
-
 // establishes data connection data_fd with client
 int buildDataConnection (int *data_fd, int control_fd) {
 
@@ -513,7 +535,7 @@ int buildDataConnection (int *data_fd, int control_fd) {
         acknowledgeError(control_fd, "Could not establish data socket\n");
         return -1;
     }
-    if (DEBUG) printf("child %d: created new data socket on descriptor %d\n", process_id, listenfd); 
+    printf("child %d: created new data socket on descriptor %d\n", process_id, listenfd); 
 
     if ( bind(listenfd, (struct sockaddr *) &data_addr, sizeof(data_addr)) < 0) {
         fprintf(stderr, "child %d: Error binding the data connection socket\n", process_id);
@@ -539,7 +561,7 @@ int buildDataConnection (int *data_fd, int control_fd) {
     // relay port number to client
     char port_string[6]; 
     snprintf(port_string, sizeof(char) * 6, "%d", data_port);
-    if (DEBUG) printf("child %d: data port string: %s\n", process_id, port_string);
+    printf("child %d: data port string: %s\n", process_id, port_string);
     acknowledgeSuccess(control_fd, port_string);
 
     int tempfd;
@@ -548,7 +570,7 @@ int buildDataConnection (int *data_fd, int control_fd) {
         close(listenfd);
         return -1;
     }
-    if (DEBUG) printf("child %d: accepted new port fd: %d\n", process_id, tempfd);
+    printf("child %d: accepted new port fd: %d\n", process_id, tempfd);
 
     // cleanup listener
     close(listenfd);
@@ -563,11 +585,14 @@ void acknowledgeError(int control_fd, char errorMsg[]) {
     
     char response[ARG_MAX_LEN] = {'\0'};  // construct response string
     response[0] = 'E'; 
+    printf("error response is now <%s>\ncatting the error message", response);
     strcat(response, errorMsg);
     response[ARG_MAX_LEN-1] = '\0';
+    printf("error message is now <%s>\n", response); 
+    printf("child %d: error message written to client: <%s>\n", process_id, response);
     int i = 0;
     while ( response[i] != '\0') {
-        if (DEBUG) printf("child %d: Writing errors - character <%c> to control connection\n", process_id, response[i]);
+        printf("child %d: Writing errors - character <%c> to control connection\n", process_id, response[i]);
         if (writeWrapper(control_fd, &(response[i]), 1) == -1) {
             fprintf(stderr, "child %d: encountered error writing to control channel. Fatal\n", process_id);
             exit(WRT_ERROR);
@@ -591,7 +616,7 @@ void acknowledgeSuccess(int connectfd, char *data_port) {
     else {
         response[1] = '\n';
     }
-    //printf("child %d: the acknowledgeSuccess message: %s\n", process_id, response);
+    printf("child %d: the acknowledgeSuccess message: %s\n", process_id, response);
     // write response string to the client
     int i = 0;
     while (response[i] != '\0') {
@@ -603,4 +628,39 @@ void acknowledgeSuccess(int connectfd, char *data_port) {
    } 
 }
 
+//returns -1 upon error, otherwise returns bytes_written
+int writeWrapper (int fd, char *msg, int write_bytes) {
+    int bytes_written;
+    if ( (bytes_written = write(fd, msg, write_bytes)) == -1) {
+        printf("child %d: Error writing to descriptor %d\n", process_id, fd);
+        return -1;
+    }
+    return bytes_written;
+}
 
+
+// attempts to acquire the binary file-write semaphore 
+// return values:    0: semaphore acquired
+//                  -1: semaphore is in use
+//                  -2: semaphore error. Check errno
+int takeSemaphore (int semid, struct sembuf *taker, int nops) {
+
+    if (semop(semid, taker, nops) == -1) {
+        int tempno = errno;
+        if (tempno == EAGAIN) { // semaphore is in use
+            return -1;
+        }
+        else {          
+            return -2;  
+        }
+    }
+    return 0; 
+}
+
+// fatal upon error. Relies upon caller to actually have acquired the semaphore
+void releaseSemaphore (int semid, struct sembuf *replacer, int nops) {
+    if (semop(semid, replacer, nops) == -1) {
+        fprintf(stderr, "child %d: fatal error attempting to release semaphore\n", process_id);      
+        exit(SEM_ERROR);
+    }
+}
