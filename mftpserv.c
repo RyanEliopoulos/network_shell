@@ -45,6 +45,8 @@ int buildDataConnection(int *, int);
 void readConnection(char *, char [], int);
 void acknowledgeError(int, char []);
 void acknowledgeSuccess(int, char[]);
+int takeSemaphore (int semid, struct sembuf *taker, int nops) {
+void releaseSemaphore (int semid, struct sembuf *replacer, int nops) {
 
 
 // required for semaphore use
@@ -603,4 +605,28 @@ void acknowledgeSuccess(int connectfd, char *data_port) {
    } 
 }
 
+// attempts to acquire the binary file-write semaphore 
+// return values:    0: semaphore acquired
+//                  -1: semaphore is in use
+//                  -2: semaphore error. Check errno
+int takeSemaphore (int semid, struct sembuf *taker, int nops) {
 
+    if (semop(semid, taker, nops) == -1) {
+        int tempno = errno;
+        if (tempno == EAGAIN) { // semaphore is in use
+            return -1;
+        }
+        else {          
+            return -2;  
+        }
+    }
+    return 0; 
+}
+
+// fatal upon error. Relies upon caller to actually have acquired the semaphore
+void releaseSemaphore (int semid, struct sembuf *replacer, int nops) {
+    if (semop(semid, replacer, nops) == -1) {
+        fprintf(stderr, "child %d: fatal error attempting to release semaphore\n", process_id);      
+        exit(SEM_ERROR);
+    }
+}
